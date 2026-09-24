@@ -76,6 +76,17 @@ nav.pop(returning: picked)  /  nav.dismissBranch(returning: picked)
 - `until: .disappeared` is the tool for presenting one modal right after another closes (avoids the classic "second sheet never appears" SwiftUI bug). If the awaited screen is covered when removed, it resumes at removal.
 - Every removal path resumes awaiters: pop, back button/edge swipe, popToRoot, swipe-dismiss, parent branch dismissed, tail replaced by a new push. Navigation from an already-removed screen (zombie Task) is a safe no-op returning `nil`.
 
+## Navigating from outside a view
+
+`Navigator.current` (static) resolves selected tab → deepest presented branch → top screen. For deep links / notifications / view models only; inside views always prefer `@Environment(\.navigator)`.
+
+```swift
+Navigator.current.push(DetailScreen(id: id))
+Navigator.current.present(SettingsScreen(), as: .sheet)
+```
+
+Backed by `NavRegistry` (internal), which holds exactly ONE root per app and asserts on a second. `NavRootView`/`NavTabBarHost` register from `.onAppear` — NEVER from `init`, because `@State(initialValue:)` re-creates the object on every view init and keeps only the first; registering in init would capture a throwaway instance (silent no-op navigation). `NavRegistry.reset()` exists for tests; `Navigator.current` is a safe no-op when nothing is registered.
+
 ## Gotchas (learned the hard way)
 
 1. **sync/async overload trap**: inside an async context, `nav.push(x)` resolves to the AWAITING overload ("expression is async" error, or an unwanted suspension). For fire-and-forget from async code, call through a small sync `@MainActor` helper function. This bit us three separate times — check for it in any async call site.

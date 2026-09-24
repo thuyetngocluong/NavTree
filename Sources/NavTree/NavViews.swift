@@ -12,6 +12,7 @@ public struct NavRootView: View {
 
     public var body: some View {
         NavBranchView(branch: branch)
+            .onAppear { NavRegistry.register(rootBranch: branch) }
     }
 }
 
@@ -32,6 +33,7 @@ struct NavTabBarHost: View {
 
     var body: some View {
         NavForestView(forest: forest)
+            .onAppear { NavRegistry.register(forest: forest) }
     }
 }
 

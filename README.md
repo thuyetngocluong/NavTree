@@ -118,6 +118,25 @@ await nav.present(TermsScreen(), as: .sheet, until: .disappeared)  // resumes AF
 nav.present(WelcomeScreen(), as: .sheet)                           // always presents reliably
 ```
 
+## Navigate from outside a view
+
+Deep links, push notifications and view models don't have `@Environment`. `Navigator.current` resolves the context the user is actually looking at — selected tab → deepest presented branch → top screen:
+
+```swift
+@MainActor
+enum DeepLinkHandler {
+    static func open(_ url: URL) {
+        switch url.path {
+        case "/detail":   Navigator.current.push(DetailScreen(id: url.lastPathComponent))
+        case "/settings": Navigator.current.present(SettingsScreen(), as: .sheet)
+        default:          break
+        }
+    }
+}
+```
+
+Inside a view, keep using `@Environment(\.navigator)` — it's precise and testable. `Navigator.current` needs exactly one root per app (NavTree asserts otherwise) and is a safe no-op before the root appears.
+
 ## Presentation config
 
 ```swift
@@ -152,7 +171,7 @@ List {
 
 ## Testing
 
-The package ships with **36 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), and deterministic multi-seed fuzzing:
+The package ships with **42 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), `Navigator.current` resolution, and deterministic multi-seed fuzzing:
 
 ```bash
 xcodebuild test -scheme NavTree -destination 'platform=iOS Simulator,name=iPhone 16'
