@@ -2,6 +2,7 @@
 
 **Your entire SwiftUI navigation as one tree.**
 
+[![CI](https://github.com/thuyetngocluong/NavTree/actions/workflows/ci.yml/badge.svg)](https://github.com/thuyetngocluong/NavTree/actions/workflows/ci.yml)
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
 [![Platform](https://img.shields.io/badge/platform-iOS%2017%2B-blue.svg)](https://developer.apple.com)
 [![SPM](https://img.shields.io/badge/SPM-compatible-brightgreen.svg)](https://swift.org/package-manager)
