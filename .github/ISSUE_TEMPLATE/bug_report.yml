@@ -1,0 +1,26 @@
+name: Bug report
+description: Something in NavTree doesn't behave as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest set of screens / navigator calls that shows the problem. `NavTreeSection()` output is very helpful.
+      render: swift
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: NavTree 1.0.0, Xcode 16.2, iOS 18.2 Simulator
+    validations:
+      required: true

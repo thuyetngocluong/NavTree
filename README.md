@@ -31,6 +31,74 @@ NavTree models navigation the way it actually behaves: **push** extends a branch
 - 🪺 **Nested everything** — modals inside modals inside tabs; presenting while presented auto-forwards to the topmost context (UIKit semantics).
 - 🔍 **Debuggable** — drop `NavTreeSection()` into any list and watch the live tree.
 
+### Before / after
+
+A common flow: open a picker in a sheet, let the user drill into a search screen inside it, and get the chosen value back.
+
+<table>
+<tr><th>Plain SwiftUI</th><th>NavTree</th></tr>
+<tr><td>
+
+```swift
+struct HomeScreen: View {
+    @State private var showPicker = false
+    @State private var picked: String?
+
+    var body: some View {
+        Button("Pick") { showPicker = true }
+            .sheet(isPresented: $showPicker) {
+                NavigationStack {
+                    PickerScreen { value in
+                        picked = value
+                        showPicker = false
+                    }
+                }
+            }
+    }
+}
+
+struct PickerScreen: View {
+    let onPick: (String) -> Void
+    @State private var path = NavigationPath()
+    // ...thread onPick into SearchScreen,
+    // add .navigationDestination(for:),
+    // handle swipe-dismiss separately...
+}
+```
+
+</td><td>
+
+```swift
+struct HomeScreen: NavScreen {
+    @Environment(\.navigator) private var nav
+    @State private var picked: String?
+
+    var body: some View {
+        Button("Pick") {
+            Task {
+                picked = await nav.present(
+                    PickerScreen(), as: .sheet
+                ) as? String
+            }
+        }
+    }
+}
+
+struct SearchScreen: NavScreen {
+    @Environment(\.navigator) private var nav
+
+    func choose(_ value: String) {
+        nav.dismissBranch(returning: value)
+    }
+    // ...
+}
+```
+
+</td></tr>
+</table>
+
+No booleans, no callbacks threaded through initializers, no `NavigationStack` to remember — and a swipe-dismiss simply resumes the `await` with `nil`.
+
 ## Quick start
 
 ### 1. Declare screens
@@ -207,6 +275,12 @@ dependencies: [
 - **sync/async overload**: in an async context, `nav.push(x)` resolves to the awaiting overload. For fire-and-forget from async code, call through a small synchronous `@MainActor` helper.
 - `NavTabBarScreen` is intentionally *not* pushable/presentable — tab bars belong at the root (TabView-outside, stacks-inside, per Apple's guidance).
 - Double-tap debouncing is the app's responsibility (disable the button while awaiting).
+
+## Contributing
+
+Bug reports, feature ideas and PRs are welcome — please open an [issue](https://github.com/thuyetngocluong/NavTree/issues/new/choose) first for larger changes. See [CHANGELOG.md](CHANGELOG.md) for what's new.
+
+If NavTree saves you some navigation headaches, a ⭐ on GitHub helps other developers find it.
 
 ## License
 
