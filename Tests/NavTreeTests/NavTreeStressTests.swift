@@ -15,16 +15,16 @@ private func settle() async {
 }
 
 @MainActor
-private func makeBranch() -> (NavBranch, Navigator) {
-    let root = NavNodeItem(DummyScreen())
-    let branch = NavBranch(root: root)
-    let nav = Navigator(branch: branch, node: root, root: branch, forest: nil)
-    return (branch, nav)
+private func makeStack() -> (NavStack, Navigator) {
+    let root = NavScreenNode(DummyScreen())
+    let stack = NavStack(root: root)
+    let nav = Navigator(stack: stack, node: root, tree: nil)
+    return (stack, nav)
 }
 
 @MainActor
-private func navigator(for node: any NavNode, in branch: NavBranch) -> Navigator {
-    Navigator(branch: branch, node: node, root: branch, forest: nil)
+private func navigator(for node: any NavNode, in stack: NavStack) -> Navigator {
+    Navigator(stack: stack, node: node, tree: nil)
 }
 
 // Helper sync để gọi đúng overload không-async từ trong hàm test async.
@@ -34,8 +34,8 @@ private func syncPush(_ nav: Navigator) {
 }
 
 @MainActor
-private func syncPresent(_ nav: Navigator, _ kind: NavBranchKind) {
-    nav.present(DummyScreen(), as: kind)
+private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
+    nav.present(DummyScreen(), as: style)
 }
 
 // LCG tất định để fuzz có thể tái lập.
@@ -53,96 +53,96 @@ private struct SeededRandom {
 struct TreeStructureTests {
 
     @Test func pushStormThenPopToRoot() {
-        let (branch, _) = makeBranch()
+        let (stack, _) = makeStack()
         for _ in 0..<200 {
-            branch.push(DummyScreen())
+            stack.push(DummyScreen())
         }
-        #expect(branch.path.count == 200)
-        branch.popToRoot()
-        #expect(branch.path.isEmpty)
-        #expect(branch.root.next == nil)
+        #expect(stack.path.count == 200)
+        stack.popToRoot()
+        #expect(stack.path.isEmpty)
+        #expect(stack.root.pushed == nil)
     }
 
     @Test func pathSetterReattachesChain() {
-        let (branch, _) = makeBranch()
-        for _ in 0..<10 { branch.push(DummyScreen()) }
-        let keep = Array(branch.path.prefix(4))
-        branch.path = keep
-        #expect(branch.path.count == 4)
-        #expect(branch.path.map(\.id) == keep.map(\.id))
-        branch.path = []
-        #expect(branch.root.next == nil)
+        let (stack, _) = makeStack()
+        for _ in 0..<10 { stack.push(DummyScreen()) }
+        let keep = Array(stack.path.prefix(4))
+        stack.path = keep
+        #expect(stack.path.count == 4)
+        #expect(stack.path.map(\.id) == keep.map(\.id))
+        stack.path = []
+        #expect(stack.root.pushed == nil)
     }
 
     @Test func popMiddleNodeCutsTail() {
-        let (branch, _) = makeBranch()
-        for _ in 0..<5 { branch.push(DummyScreen()) }
-        let middle = branch.path[2].base
-        branch.pop(middle)
-        #expect(branch.path.count == 2)
+        let (stack, _) = makeStack()
+        for _ in 0..<5 { stack.push(DummyScreen()) }
+        let middle = stack.path[2].base
+        stack.pop(middle)
+        #expect(stack.path.count == 2)
     }
 
     @Test func popRemovedNodeIsNoop() {
-        let (branch, _) = makeBranch()
-        branch.push(DummyScreen())
-        let node = branch.path[0].base
-        branch.pop(node)
-        branch.pop(node) // lần 2: node đã ra khỏi cây
-        #expect(branch.path.isEmpty)
+        let (stack, _) = makeStack()
+        stack.push(DummyScreen())
+        let node = stack.path[0].base
+        stack.pop(node)
+        stack.pop(node) // lần 2: node đã ra khỏi cây
+        #expect(stack.path.isEmpty)
     }
 
     @Test func presentForwardsToDeepestLeaf() {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .sheet)
         nav.present(DummyScreen(), as: .sheet) // node gốc đã có sheet → forward xuống leaf
-        let firstSheet = branch.root.presents.first
-        #expect(branch.root.presents.count == 1)
-        #expect(firstSheet?.root.presents.count == 1)
+        let firstSheet = stack.root.presented.first
+        #expect(stack.root.presented.count == 1)
+        #expect(firstSheet?.root.presented.count == 1)
     }
 
     @Test func coverForwardsOnTopOfSheet() {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .sheet)
         nav.present(DummyScreen(), as: .fullScreenCover)
-        let sheet = branch.root.presents.first
-        #expect(sheet?.kind == .sheet)
-        #expect(sheet?.root.presents.first?.kind == .fullScreenCover)
+        let sheet = stack.root.presented.first
+        #expect(sheet?.style == .sheet)
+        #expect(sheet?.root.presented.first?.style == .fullScreenCover)
     }
 
-    @Test func dismissBranchPrunesNestedSubtree() {
-        let (branch, nav) = makeBranch()
+    @Test func dismissPrunesNestedSubtree() {
+        let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .sheet)
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         sheet.push(DummyScreen())
         sheet.push(DummyScreen())
-        let innerNav = navigator(for: sheet.current, in: sheet)
+        let innerNav = navigator(for: sheet.top, in: sheet)
         innerNav.present(DummyScreen(), as: .fullScreenCover)
         sheet.dismissSelf()
-        #expect(branch.root.presents.isEmpty)
-        #expect(branch.treeLines().count == 1)
+        #expect(stack.root.presented.isEmpty)
+        #expect(stack.treeLines().count == 1)
     }
 
     @Test func nodesDeallocateAfterPop() {
-        let (branch, _) = makeBranch()
+        let (stack, _) = makeStack()
         weak var weakNode: AnyObject?
         do {
-            branch.push(DummyScreen())
-            weakNode = branch.path[0].base
+            stack.push(DummyScreen())
+            weakNode = stack.path[0].base
         }
         #expect(weakNode != nil)
-        branch.popToRoot()
+        stack.popToRoot()
         #expect(weakNode == nil)
     }
 
-    @Test func branchDeallocatesAfterDismiss() {
-        let (branch, nav) = makeBranch()
-        weak var weakBranch: NavBranch?
+    @Test func stackDeallocatesAfterDismiss() {
+        let (stack, nav) = makeStack()
+        weak var weakStack: NavStack?
         nav.present(DummyScreen(), as: .sheet)
-        weakBranch = branch.root.presents.first
-        #expect(weakBranch != nil)
-        weakBranch?.dismissSelf()
-        #expect(branch.root.presents.isEmpty)
-        #expect(weakBranch == nil)
+        weakStack = stack.root.presented.first
+        #expect(weakStack != nil)
+        weakStack?.dismissSelf()
+        #expect(stack.root.presented.isEmpty)
+        #expect(weakStack == nil)
     }
 }
 
@@ -152,59 +152,59 @@ struct TreeStructureTests {
 struct AwaitTests {
 
     @Test func awaitPushResumesOnPop() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.push(DummyScreen()) }
         await settle()
-        #expect(branch.path.count == 1)
-        branch.popToRoot()
+        #expect(stack.path.count == 1)
+        stack.popToRoot()
         let result = await task.value
         #expect(result == nil)
     }
 
     @Test func awaitPushReceivesResult() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.push(DummyScreen()) }
         await settle()
-        let pushedNav = navigator(for: branch.current, in: branch)
+        let pushedNav = navigator(for: stack.top, in: stack)
         pushedNav.pop(returning: "42")
         let result = await task.value
         #expect(result as? String == "42")
     }
 
     @Test func awaitPresentReceivesResultOnDismiss() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.present(DummyScreen(), as: .sheet) }
         await settle()
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         let sheetNav = navigator(for: sheet.root, in: sheet)
-        sheetNav.dismissBranch(returning: "done")
+        sheetNav.dismiss(returning: "done")
         let result = await task.value
         #expect(result as? String == "done")
     }
 
-    @Test func popAtBranchRootResolvesPresentAwaiter() async {
-        let (branch, nav) = makeBranch()
+    @Test func popAtStackRootResolvesPresentAwaiter() async {
+        let (stack, nav) = makeStack()
         let task = Task { await nav.present(DummyScreen(), as: .sheet) }
         await settle()
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         let sheetNav = navigator(for: sheet.root, in: sheet)
         sheetNav.pop(returning: "via-pop") // pop ở màn đầu nhánh present = dismiss
         let result = await task.value
         #expect(result as? String == "via-pop")
-        #expect(branch.root.presents.isEmpty)
+        #expect(stack.root.presented.isEmpty)
     }
 
     @Test func allAwaitersResumeWhenSubtreeCollapses() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         var tasks: [Task<(any Sendable)?, Never>] = []
         for _ in 0..<5 {
-            let current = branch.current
-            let currentNav = navigator(for: current, in: branch)
+            let current = stack.top
+            let currentNav = navigator(for: current, in: stack)
             tasks.append(Task { await currentNav.push(DummyScreen()) })
             await settle()
         }
-        let midNode = branch.path[2].base
-        let midNav = navigator(for: midNode, in: branch)
+        let midNode = stack.path[2].base
+        let midNav = navigator(for: midNode, in: stack)
         tasks.append(Task { await midNav.present(DummyScreen(), as: .sheet) })
         await settle()
 
@@ -213,54 +213,54 @@ struct AwaitTests {
             let result = await task.value
             #expect(result == nil)
         }
-        #expect(branch.path.isEmpty)
-        #expect(branch.root.presents.isEmpty)
+        #expect(stack.path.isEmpty)
+        #expect(stack.root.presented.isEmpty)
     }
 
     @Test func replacingTailResumesOldAwaiter() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let first = Task { await nav.push(DummyScreen()) }
         await settle()
         let second = Task { await nav.push(DummyScreen()) }
         await settle()
         let firstResult = await first.value
         #expect(firstResult == nil)
-        #expect(branch.path.count == 1)
-        branch.popToRoot()
+        #expect(stack.path.count == 1)
+        stack.popToRoot()
         _ = await second.value
     }
 
     @Test func zombiePushFromRemovedNodeReturnsImmediately() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         syncPush(nav)
-        let removed = branch.path[0].base
-        let removedNav = navigator(for: removed, in: branch)
-        branch.popToRoot()
+        let removed = stack.path[0].base
+        let removedNav = navigator(for: removed, in: stack)
+        stack.popToRoot()
         let result = await removedNav.push(DummyScreen())
         #expect(result == nil)
-        #expect(branch.path.isEmpty)
+        #expect(stack.path.isEmpty)
         let presentResult = await removedNav.present(DummyScreen(), as: .sheet)
         #expect(presentResult == nil)
-        #expect(branch.root.presents.isEmpty)
+        #expect(stack.root.presented.isEmpty)
     }
 
     @Test func disappearedAwaiterResumesImmediatelyWhenNodeInvisible() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.push(DummyScreen(), until: .disappeared) }
         await settle()
-        let pushedNav = navigator(for: branch.current, in: branch)
+        let pushedNav = navigator(for: stack.top, in: stack)
         pushedNav.pop(returning: "gone")
         let result = await task.value
         #expect(result as? String == "gone")
     }
 
     @Test func disappearedAwaiterWaitsForVisibleNode() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.push(DummyScreen(), until: .disappeared) }
         await settle()
-        let pushed = branch.current
+        let pushed = stack.top
         pushed.isVisible = true
-        let pushedNav = navigator(for: pushed, in: branch)
+        let pushedNav = navigator(for: pushed, in: stack)
         pushedNav.pop(returning: "animated")
         await settle()
         #expect(pushed.isRemoved)
@@ -271,13 +271,13 @@ struct AwaitTests {
         #expect(result as? String == "animated")
     }
 
-    @Test func branchDisappearedTransfersToVisibleTop() async {
-        let (branch, nav) = makeBranch()
+    @Test func stackDisappearedTransfersToVisibleTop() async {
+        let (stack, nav) = makeStack()
         let task = Task { await nav.present(DummyScreen(), as: .sheet, until: .disappeared) }
         await settle()
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         sheet.push(DummyScreen())
-        let top = sheet.current
+        let top = sheet.top
         top.isVisible = true
         sheet.pendingResult = "closed"
         sheet.dismissSelf()
@@ -296,28 +296,28 @@ struct AwaitTests {
 struct FuzzTests {
 
     @Test func randomOperationStormKeepsTreeConsistent() async {
-        let (rootBranch, _) = makeBranch()
+        let (rootStack, _) = makeStack()
         var rng = SeededRandom(state: 0xDEADBEEF)
         var awaitTasks: [Task<(any Sendable)?, Never>] = []
 
-        func liveBranches() -> [NavBranch] {
-            var result: [NavBranch] = []
-            func walk(_ branch: NavBranch) {
-                result.append(branch)
-                var node: (any NavNode)? = branch.root
+        func liveStacks() -> [NavStack] {
+            var result: [NavStack] = []
+            func walk(_ stack: NavStack) {
+                result.append(stack)
+                var node: (any NavNode)? = stack.root
                 while let n = node {
-                    for presented in n.presents { walk(presented) }
-                    node = n.next
+                    for presented in n.presented { walk(presented) }
+                    node = n.pushed
                 }
             }
-            walk(rootBranch)
+            walk(rootStack)
             return result
         }
 
         for i in 0..<500 {
-            let branches = liveBranches()
-            let branch = branches[rng.next(branches.count)]
-            let nav = navigator(for: branch.current, in: branch)
+            let stacks = liveStacks()
+            let stack = stacks[rng.next(stacks.count)]
+            let nav = navigator(for: stack.top, in: stack)
             switch rng.next(7) {
             case 0, 1:
                 syncPush(nav)
@@ -328,26 +328,26 @@ struct FuzzTests {
             case 4:
                 nav.popToRoot()
             case 5:
-                nav.dismissBranch(returning: i)
+                nav.dismiss(returning: i)
             default:
-                let node = branch.current
-                let nodeNav = navigator(for: node, in: branch)
+                let node = stack.top
+                let nodeNav = navigator(for: node, in: stack)
                 awaitTasks.append(Task { await nodeNav.push(DummyScreen()) })
                 await settle()
             }
-            let lines = rootBranch.treeLines()
+            let lines = rootStack.treeLines()
             #expect(!lines.isEmpty)
             var count = 0
-            var node = rootBranch.root.next
-            while let n = node { count += 1; node = n.next }
-            #expect(rootBranch.path.count == count)
+            var node = rootStack.root.pushed
+            while let n = node { count += 1; node = n.pushed }
+            #expect(rootStack.path.count == count)
         }
 
-        rootBranch.popToRoot()
-        rootBranch.root.presents = []
+        rootStack.popToRoot()
+        rootStack.root.presented = []
         for task in awaitTasks {
             _ = await task.value
         }
-        #expect(rootBranch.treeLines().count == 1)
+        #expect(rootStack.treeLines().count == 1)
     }
 }

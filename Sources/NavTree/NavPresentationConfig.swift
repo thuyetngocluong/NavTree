@@ -25,7 +25,7 @@ public struct NavPresentationConfig: Sendable {
 
     public var dragIndicator: Visibility
 
-    /// Chặn vuốt / tap-ngoài để đóng — chỉ đóng được bằng dismissBranch/pop.
+    /// Chặn vuốt / tap-ngoài để đóng — chỉ đóng được bằng dismiss/pop.
     public var interactiveDismissDisabled: Bool
 
     public init(

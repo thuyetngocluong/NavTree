@@ -12,66 +12,66 @@ private func settle() async {
 }
 
 @MainActor
-private func makeBranch() -> (NavBranch, Navigator) {
-    let root = NavNodeItem(DummyScreen())
-    let branch = NavBranch(root: root)
-    let nav = Navigator(branch: branch, node: root, root: branch, forest: nil)
-    return (branch, nav)
+private func makeStack() -> (NavStack, Navigator) {
+    let root = NavScreenNode(DummyScreen())
+    let stack = NavStack(root: root)
+    let nav = Navigator(stack: stack, node: root, tree: nil)
+    return (stack, nav)
 }
 
 @MainActor
-private func syncPresent(_ nav: Navigator, _ kind: NavBranchKind) {
-    nav.present(DummyScreen(), as: kind)
+private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
+    nav.present(DummyScreen(), as: style)
 }
 
 @MainActor
 struct PresentationConfigTests {
 
-    @Test func configIsStoredOnBranch() {
-        let (branch, nav) = makeBranch()
+    @Test func configIsStoredOnStack() {
+        let (stack, nav) = makeStack()
         nav.present(
             DummyScreen(),
             as: .sheet,
             config: .init(detents: [.medium, .large], dragIndicator: .visible, interactiveDismissDisabled: true)
         )
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         #expect(sheet.config.detents == [.medium, .large])
         #expect(sheet.config.dragIndicator == .visible)
         #expect(sheet.config.interactiveDismissDisabled)
     }
 
     @Test func defaultConfigIsEmpty() {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .sheet)
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         #expect(sheet.config.detents.isEmpty)
         #expect(!sheet.config.interactiveDismissDisabled)
     }
 
     @Test func popoverBehavesLikeOtherKinds() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.present(DummyScreen(), as: .popover) }
         await settle()
-        let popover = branch.root.presents[0]
-        #expect(popover.kind == .popover)
+        let popover = stack.root.presented[0]
+        #expect(popover.style == .popover)
 
         // Present tiếp khi popover đang mở → forward xuống leaf của popover
         syncPresent(nav, .sheet)
-        #expect(branch.root.presents.count == 1)
-        #expect(popover.root.presents.first?.kind == .sheet)
+        #expect(stack.root.presented.count == 1)
+        #expect(popover.root.presented.first?.style == .sheet)
 
         // Dismiss popover → cả sheet lồng bên trong chết theo, awaiter nhận kết quả
-        let popNav = Navigator(branch: popover, node: popover.root, root: branch, forest: nil)
-        popNav.dismissBranch(returning: "pop-done")
+        let popNav = Navigator(stack: popover, node: popover.root, tree: nil)
+        popNav.dismiss(returning: "pop-done")
         let result = await task.value
         #expect(result as? String == "pop-done")
-        #expect(branch.root.presents.isEmpty)
+        #expect(stack.root.presented.isEmpty)
     }
 
     @Test func treeLinesLabelsPopover() {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .popover)
-        let lines = branch.treeLines()
+        let lines = stack.treeLines()
         #expect(lines.contains { $0.contains("[popover]") })
     }
 }

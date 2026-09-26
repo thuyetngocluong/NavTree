@@ -14,16 +14,16 @@ private func settle() async {
 }
 
 @MainActor
-private func makeBranch() -> (NavBranch, Navigator) {
-    let root = NavNodeItem(DummyScreen())
-    let branch = NavBranch(root: root)
-    let nav = Navigator(branch: branch, node: root, root: branch, forest: nil)
-    return (branch, nav)
+private func makeStack() -> (NavStack, Navigator) {
+    let root = NavScreenNode(DummyScreen())
+    let stack = NavStack(root: root)
+    let nav = Navigator(stack: stack, node: root, tree: nil)
+    return (stack, nav)
 }
 
 @MainActor
-private func navigator(for node: any NavNode, in branch: NavBranch) -> Navigator {
-    Navigator(branch: branch, node: node, root: branch, forest: nil)
+private func navigator(for node: any NavNode, in stack: NavStack) -> Navigator {
+    Navigator(stack: stack, node: node, tree: nil)
 }
 
 @MainActor
@@ -32,8 +32,8 @@ private func syncPush(_ nav: Navigator) {
 }
 
 @MainActor
-private func syncPresent(_ nav: Navigator, _ kind: NavBranchKind) {
-    nav.present(DummyScreen(), as: kind)
+private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
+    nav.present(DummyScreen(), as: style)
 }
 
 private struct SeededRandom {
@@ -55,38 +55,38 @@ private struct CustomResult: Sendable, Equatable {
 struct ReentrancyTests {
 
     @Test func pushAgainInsideResumedContinuation() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task {
             _ = await nav.push(DummyScreen())
             syncPush(nav)
         }
         await settle()
-        branch.popToRoot()
+        stack.popToRoot()
         _ = await task.value
         await settle()
-        #expect(branch.path.count == 1)
-        branch.popToRoot()
-        #expect(branch.path.isEmpty)
+        #expect(stack.path.count == 1)
+        stack.popToRoot()
+        #expect(stack.path.isEmpty)
     }
 
     @Test func presentInsideResumedContinuation() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task {
             _ = await nav.present(DummyScreen(), as: .sheet)
             syncPresent(nav, .fullScreenCover)
         }
         await settle()
-        branch.root.presents[0].dismissSelf()
+        stack.root.presented[0].dismissSelf()
         _ = await task.value
         await settle()
-        #expect(branch.root.presents.count == 1)
-        #expect(branch.root.presents[0].kind == .fullScreenCover)
-        branch.root.presents[0].dismissSelf()
-        #expect(branch.root.presents.isEmpty)
+        #expect(stack.root.presented.count == 1)
+        #expect(stack.root.presented[0].style == .fullScreenCover)
+        stack.root.presented[0].dismissSelf()
+        #expect(stack.root.presented.isEmpty)
     }
 
     @Test func chainedAwaitsSequentially() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { () -> [String] in
             var results: [String] = []
             for _ in 0..<3 {
@@ -97,13 +97,13 @@ struct ReentrancyTests {
         }
         for expected in ["a", "b", "c"] {
             await settle()
-            #expect(branch.path.count == 1)
-            let topNav = navigator(for: branch.current, in: branch)
+            #expect(stack.path.count == 1)
+            let topNav = navigator(for: stack.top, in: stack)
             topNav.pop(returning: expected)
         }
         let results = await task.value
         #expect(results == ["a", "b", "c"])
-        #expect(branch.path.isEmpty)
+        #expect(stack.path.isEmpty)
     }
 }
 
@@ -112,39 +112,39 @@ struct ReentrancyTests {
 @MainActor
 struct DeepNestingTests {
 
-    @Test func threeHundredNestedBranchesDismissWithoutStackOverflow() {
-        let (branch, _) = makeBranch()
-        var node: any NavNode = branch.root
+    @Test func threeHundredNestedModalsDismissWithoutStackOverflow() {
+        let (stack, _) = makeStack()
+        var node: any NavNode = stack.root
         for i in 0..<300 {
-            let presented = node.present(DummyScreen(), kind: i % 2 == 0 ? .sheet : .fullScreenCover)
+            let presented = node.present(DummyScreen(), style: i % 2 == 0 ? .sheet : .fullScreenCover)
             presented.push(DummyScreen())
-            node = presented.current
+            node = presented.top
         }
-        #expect(branch.treeLines().count == 1 + 300 * 2)
-        branch.root.presents = []
-        #expect(branch.treeLines().count == 1)
+        #expect(stack.treeLines().count == 1 + 300 * 2)
+        stack.root.presented = []
+        #expect(stack.treeLines().count == 1)
     }
 
     @Test func thousandNodeChainPopToRoot() {
-        let (branch, _) = makeBranch()
-        for _ in 0..<1000 { branch.push(DummyScreen()) }
-        #expect(branch.path.count == 1000)
-        branch.popToRoot()
-        #expect(branch.path.isEmpty)
+        let (stack, _) = makeStack()
+        for _ in 0..<1000 { stack.push(DummyScreen()) }
+        #expect(stack.path.count == 1000)
+        stack.popToRoot()
+        #expect(stack.path.isEmpty)
     }
 
     @Test func popMiddleNodePrunesTailPresents() async {
-        let (branch, _) = makeBranch()
-        for _ in 0..<6 { branch.push(DummyScreen()) }
-        let tailNode = branch.path[4].base
-        let tailNav = navigator(for: tailNode, in: branch)
+        let (stack, _) = makeStack()
+        for _ in 0..<6 { stack.push(DummyScreen()) }
+        let tailNode = stack.path[4].base
+        let tailNav = navigator(for: tailNode, in: stack)
         let task = Task { await tailNav.present(DummyScreen(), as: .sheet) }
         await settle()
-        #expect(tailNode.presents.count == 1)
-        branch.pop(branch.path[2].base)
+        #expect(tailNode.presented.count == 1)
+        stack.pop(stack.path[2].base)
         let result = await task.value
         #expect(result == nil)
-        #expect(branch.path.count == 2)
+        #expect(stack.path.count == 2)
     }
 }
 
@@ -154,77 +154,91 @@ struct DeepNestingTests {
 struct ResultEdgeTests {
 
     @Test func customStructAndIntResults() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let pushTask = Task { await nav.push(DummyScreen()) }
         await settle()
         let custom = CustomResult(code: 7, tag: "vip")
-        navigator(for: branch.current, in: branch).pop(returning: custom)
+        navigator(for: stack.top, in: stack).pop(returning: custom)
         #expect(await pushTask.value as? CustomResult == custom)
 
         let presentTask = Task { await nav.present(DummyScreen(), as: .sheet) }
         await settle()
-        let sheet = branch.root.presents[0]
-        navigator(for: sheet.root, in: sheet).dismissBranch(returning: 999)
+        let sheet = stack.root.presented[0]
+        navigator(for: sheet.root, in: sheet).dismiss(returning: 999)
         #expect(await presentTask.value as? Int == 999)
     }
 
     @Test func secondDismissDoesNotOverrideResult() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let task = Task { await nav.present(DummyScreen(), as: .sheet) }
         await settle()
-        let sheet = branch.root.presents[0]
+        let sheet = stack.root.presented[0]
         let sheetNav = navigator(for: sheet.root, in: sheet)
-        sheetNav.dismissBranch(returning: "first")
-        sheetNav.dismissBranch(returning: "second")
+        sheetNav.dismiss(returning: "first")
+        sheetNav.dismiss(returning: "second")
         let result = await task.value
         #expect(result as? String == "first")
     }
 
     @Test func popMiddleDeliversResultOnlyToThatNode() async {
-        let (branch, nav) = makeBranch()
+        let (stack, nav) = makeStack()
         let firstTask = Task { await nav.push(DummyScreen()) }
         await settle()
-        let firstNode = branch.current
-        let secondTask = Task { await navigator(for: firstNode, in: branch).push(DummyScreen()) }
+        let firstNode = stack.top
+        let secondTask = Task { await navigator(for: firstNode, in: stack).push(DummyScreen()) }
         await settle()
-        #expect(branch.path.count == 2)
-        navigator(for: firstNode, in: branch).pop(returning: "mine")
+        #expect(stack.path.count == 2)
+        navigator(for: firstNode, in: stack).pop(returning: "mine")
         #expect(await firstTask.value as? String == "mine")
         #expect(await secondTask.value == nil)
     }
 }
 
-// MARK: - Forest
+// MARK: - Tabs
+
+private struct TabA: NavTabScreen {
+    let tabTitle = "A"
+    let tabSystemImage = "a.circle"
+    var body: some View { Text("A") }
+}
+
+private struct TabB: NavTabScreen {
+    let tabTitle = "B"
+    let tabSystemImage = "b.circle"
+    var body: some View { Text("B") }
+}
+
+private struct TwoTabs: NavTabBarScreen {
+    var content: [any NavTabScreen] {
+        TabA()
+        TabB()
+    }
+}
 
 @MainActor
-struct ForestEdgeTests {
+struct TabsEdgeTests {
 
     @Test func selectTabOutOfBoundsIsNoop() {
-        let tabs = [
-            NavTab("A", systemImage: "a.circle", root: NavNodeItem(DummyScreen())),
-            NavTab("B", systemImage: "b.circle", root: NavNodeItem(DummyScreen())),
-        ]
-        let forest = NavForest(tabs: tabs)
-        let nav = Navigator(branch: tabs[0].branch, node: tabs[0].branch.root, root: tabs[0].branch, forest: forest)
-        let before = forest.selection
+        let tree = NavTree(root: TwoTabs())
+        let tabs = tree.tabs!
+        let nav = tree.current
+        let before = tabs.selection
         nav.selectTab(5)
         nav.selectTab(-1)
-        #expect(forest.selection == before)
+        #expect(tabs.selection == before)
         nav.selectTab(1)
-        #expect(forest.selection == tabs[1].id)
+        #expect(tabs.selection == tabs.tabs[1].id)
     }
 
     @Test func treeLinesCoversAllTabs() {
-        let tabs = [
-            NavTab("A", systemImage: "a.circle", root: NavNodeItem(DummyScreen())),
-            NavTab("B", systemImage: "b.circle", root: NavNodeItem(DummyScreen())),
-        ]
-        let forest = NavForest(tabs: tabs)
-        tabs[1].branch.push(DummyScreen())
-        let nav = Navigator(branch: tabs[0].branch, node: tabs[0].branch.root, root: tabs[0].branch, forest: forest)
-        let lines = nav.treeLines()
+        let tree = NavTree(root: TwoTabs())
+        let tabs = tree.tabs!
+        tabs.tabs[1].stack.push(DummyScreen())
+        // Navigator của tab A vẫn in được toàn cây vì mang tree.
+        let lines = tree.current.treeLines()
         #expect(lines.count == 5)
         #expect(lines.filter { $0.contains("[tab]") }.count == 2)
+        #expect(tree.treeLines() == lines)
     }
 }
 
@@ -235,29 +249,29 @@ struct FuzzRound2Tests {
 
     @Test(arguments: [UInt64(0xCAFEBABE), 0x12345678, 0x0BADF00D])
     func multiSeedStormWithVisibilityFlips(seed: UInt64) async {
-        let (rootBranch, _) = makeBranch()
+        let (rootStack, _) = makeStack()
         var rng = SeededRandom(state: seed)
         var awaitTasks: [Task<(any Sendable)?, Never>] = []
 
-        func liveBranches() -> [NavBranch] {
-            var result: [NavBranch] = []
-            func walk(_ branch: NavBranch) {
-                result.append(branch)
-                var node: (any NavNode)? = branch.root
+        func liveStacks() -> [NavStack] {
+            var result: [NavStack] = []
+            func walk(_ stack: NavStack) {
+                result.append(stack)
+                var node: (any NavNode)? = stack.root
                 while let n = node {
-                    for presented in n.presents { walk(presented) }
-                    node = n.next
+                    for presented in n.presented { walk(presented) }
+                    node = n.pushed
                 }
             }
-            walk(rootBranch)
+            walk(rootStack)
             return result
         }
 
         for i in 0..<300 {
-            let branches = liveBranches()
-            let branch = branches[rng.next(branches.count)]
-            let node = branch.current
-            let nav = navigator(for: node, in: branch)
+            let stacks = liveStacks()
+            let stack = stacks[rng.next(stacks.count)]
+            let node = stack.top
+            let nav = navigator(for: node, in: stack)
             switch rng.next(9) {
             case 0, 1:
                 syncPush(nav)
@@ -268,7 +282,7 @@ struct FuzzRound2Tests {
             case 4:
                 nav.popToRoot()
             case 5:
-                nav.dismissBranch(returning: "d\(i)")
+                nav.dismiss(returning: "d\(i)")
             case 6:
                 node.isVisible = rng.next(2) == 0
             case 7:
@@ -281,17 +295,17 @@ struct FuzzRound2Tests {
                 await settle()
             }
             var count = 0
-            var walker = rootBranch.root.next
-            while let n = walker { count += 1; walker = n.next }
-            #expect(rootBranch.path.count == count)
+            var walker = rootStack.root.pushed
+            while let n = walker { count += 1; walker = n.pushed }
+            #expect(rootStack.path.count == count)
         }
 
-        rootBranch.popToRoot()
-        rootBranch.root.presents = []
-        rootBranch.root.isVisible = false
+        rootStack.popToRoot()
+        rootStack.root.presented = []
+        rootStack.root.isVisible = false
         for task in awaitTasks {
             _ = await task.value
         }
-        #expect(rootBranch.treeLines().count == 1)
+        #expect(rootStack.treeLines().count == 1)
     }
 }

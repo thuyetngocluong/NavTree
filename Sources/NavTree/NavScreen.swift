@@ -23,12 +23,14 @@ public enum NavTabBuilder {
 }
 
 /// Màn tab bar của app — chỉ khai `content` (danh sách tab), thân được gán ngầm.
+/// Cố ý KHÔNG phải NavScreen: tab bar chỉ đứng ở gốc, không push/present được.
+/// Dùng qua `NavTree(root:)` / `NavRootView(root:)`; thân ngầm chỉ là đường tắt cho preview.
 public protocol NavTabBarScreen: View {
     @NavTabBuilder var content: [any NavTabScreen] { get }
 }
 
 public extension NavTabBarScreen {
     var body: some View {
-        NavTabBarHost(tabs: content)
+        NavRootView(root: self)
     }
 }
