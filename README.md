@@ -208,7 +208,7 @@ List {
 
 ## Testing
 
-The package ships with **70 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), `NavTree.current` resolution, and deterministic multi-seed fuzzing:
+The package ships with **72 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), `NavTree.current` resolution, and deterministic multi-seed fuzzing:
 
 ```bash
 xcodebuild test -scheme NavTree -destination 'platform=iOS Simulator,name=iPhone 16'
