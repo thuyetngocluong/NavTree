@@ -155,19 +155,38 @@ Deep links, push notifications and view models don't have `@Environment`. Hand t
 ```swift
 @MainActor
 enum DeepLinkHandler {
-    static func open(_ url: URL, in tree: NavTree) {
-        switch url.path {
-        case "/detail":   tree.current.push(DetailScreen(id: url.lastPathComponent))
-        case "/settings": tree.current.present(SettingsScreen(), as: .sheet)
-        default:          break
+    static func open(_ url: URL, in tree: NavTree) async {
+        switch url.host() {
+        case "detail":                              // myapp://detail/42
+            tree.reset()                            // close every modal, pop every tab to root
+            tree.selectedTab = 0
+            push(DetailScreen(id: url.lastPathComponent), in: tree)
+        case "compose":                             // myapp://compose
+            await tree.reset(until: .disappeared)   // wait until old modals finished closing
+            present(ComposeScreen(), in: tree)
+        default:
+            break
         }
     }
+
+    // Sync helpers: inside an async function `push`/`present` would pick the awaiting overload.
+    private static func push(_ screen: some NavScreen, in tree: NavTree) { tree.current.push(screen) }
+    private static func present(_ screen: some NavScreen, in tree: NavTree) { tree.current.present(screen, as: .sheet) }
 }
 
 // SceneRoot (one per window)
 NavRootView(tree: tree)
-    .onOpenURL { DeepLinkHandler.open($0, in: tree) }       // URL schemes + universal links, per window
+    .onOpenURL { url in Task { await DeepLinkHandler.open(url, in: tree) } }   // URL schemes + universal links
 ```
+
+### Reset before navigating
+
+A link can arrive while the user is three screens deep inside a sheet on another tab. `tree.reset()` returns the tree to a clean state first:
+
+- It closes the modal covering the screen (whichever tab opened it) and pops the stacks to their root screen. The selected tab is kept, so set `selectedTab` afterwards.
+- `reset(.selectedTab)` pops only the selected tab and keeps the other tabs' stacks. The covering modal is still closed.
+- Every pending `await push/present` in the removed part resumes with `nil`.
+- Pushing right after `reset()` is fine: SwiftUI merges the pop and the push. To **present** right after, use `await tree.reset(until: .disappeared)`, which returns once the closing screens have finished animating out, so the new modal is never dropped.
 
 Inside a view, keep using `@Environment(\.navigator)` for relative navigation — it's precise and testable. For whole-tree operations from a view, read `@Environment(\.navTree)`. It is deliberately weak and optional: SwiftUI and UIKit cache environment snapshots (for example inside `NavigationStack` and the floating tab bar) longer than the views live, so a strongly injected tree would outlive a root swap.
 
@@ -208,7 +227,7 @@ List {
 
 ## Testing
 
-The package ships with **72 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), `NavTree.current` resolution, and deterministic multi-seed fuzzing:
+The package ships with **84 tests** covering tree structure, continuation/result delivery, reentrancy, 300-deep nesting, deallocation (weak-reference checks), `NavTree.current` resolution, and deterministic multi-seed fuzzing:
 
 ```bash
 xcodebuild test -scheme NavTree -destination 'platform=iOS Simulator,name=iPhone 16'

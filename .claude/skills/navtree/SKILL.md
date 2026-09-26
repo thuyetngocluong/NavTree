@@ -15,7 +15,7 @@ Type names mirror the SwiftUI thing they represent (all internal except `NavTree
 
 | Type | Is | Key members |
 |---|---|---|
-| `NavTree` (public) | the whole scene | `root` (`.stack` / `.tabs`), `current`, `selectedTab` (observable get/set index), `selectTab`, `treeLines()` |
+| `NavTree` (public) | the whole scene | `root` (`.stack` / `.tabs`), `current`, `selectedTab` (observable get/set index), `selectTab`, `reset(_:)` / `reset(_:until:)`, `treeLines()` |
 | `NavStack` | one `NavigationStack` | `root`, `top`, `path`, `style` (nil = root stack), `owner` (weak), `presentedModal`, `topmostPresenter(from:)`, `push/pop/popToRoot/dismissSelf` |
 | `NavTabs` | one `TabView` | `tabs: [NavTab]`, `selection`, `selectedTab` |
 | `NavScreenNode<Screen>` (protocol `NavNode`) | one screen | `pushed`, `presented: [NavStack]`, awaiters |
@@ -120,6 +120,23 @@ tree.current.push(DetailScreen(id: id))
 tree.current.present(SettingsScreen(), as: .sheet)
 ```
 
+### Deep links: always reset first
+
+```swift
+static func open(_ url: URL, in tree: NavTree) async {
+    tree.reset()                              // close covering modal + pop stacks (default .allTabs; .selectedTab keeps other tabs)
+    tree.selectedTab = 0                      // reset keeps the selected tab
+    push(DetailScreen(id: 42), in: tree)      // push right after reset is fine
+    // presenting right after? use: await tree.reset(until: .disappeared)
+}
+// SceneRoot: .onOpenURL { url in Task { await DeepLinkHandler.open(url, in: tree) } }
+```
+
+- `reset` always closes the modal covering the screen, even with `.selectedTab`, because a modal covers the whole TabView.
+- `reset(until: .disappeared)` waits (weakly) for every screen that was VISIBLE and got removed to receive `onDisappear`. Released screens stop the wait, so it never hangs on a torn-down window.
+- Inside an async handler, call `push`/`present` through small sync helpers (overload trap, gotcha 1). The sample app's `DeepLinkHandler` shows the full pattern with the `sample://` URL scheme (`sample://detail/<n>`, `sample://settings`, `sample://sheet`); test it with `xcrun simctl openurl <udid> "sample://detail/5"`.
+- `NavNode.closingModalScreen` (weak) remembers the still-visible screen of a modal a node just closed, so a node removed in the same tick (dismiss then popToRoot, which is what reset does) still hands its `.disappeared` awaiters to the closing modal. Without it they resume while the cover is still animating out (found by the lifecycle fuzz).
+
 ## Gotchas (learned the hard way)
 
 1. **sync/async overload trap**: inside an async context, `nav.push(x)` resolves to the AWAITING overload ("expression is async" error, or an unwanted suspension). For fire-and-forget from async code, call through a small sync `@MainActor` helper function. This bit us three separate times — check for it in any async call site.
@@ -127,7 +144,7 @@ tree.current.present(SettingsScreen(), as: .sheet)
 3. Model types (`NavNode`/`NavStack`/`NavTabs`) are `@MainActor` and internal — public surface is the 4 screen protocols, `NavTree`, `Navigator`, `NavPresentationStyle`, `NavAwaitUntil`, `NavDetent`, `NavPresentationConfig`, `NavRootView`, `NavTreeSection`.
 4. Debug view: drop `NavTreeSection()` into any `List` to render the live navigation tree (`[root]/[push]/[sheet]/[cover]/[popover]` lines, `▶` = selected tab).
 5. Double-tap debounce is the app's job (disable button while awaiting), not the library's.
-6. Package tests (72, incl. invariant-checking NavTree fuzz (`NavTreeStressRound3Tests`: 10 seeds × 800 steps, stack + tab roots, zombies, stale paths, teardown ledger), a lifecycle fuzz (`NavTreeStressRound4Tests`) whose UISim plays SwiftUI — keeps removed screens mounted until onDisappear, sheet keeps the presenter visible, cover hides it — and checks no early `.disappeared` resume and no hang once the UI settles (do not use the library's own helpers to compute expectations there), fuzz + reentrancy + presentation config + NavTree.current): run from the package dir —
+6. Package tests (84, incl. invariant-checking NavTree fuzz (`NavTreeStressRound3Tests`: 10 seeds × 800 steps, stack + tab roots, zombies, stale paths, teardown ledger), a lifecycle fuzz (`NavTreeStressRound4Tests`) whose UISim plays SwiftUI — keeps removed screens mounted until onDisappear, sheet keeps the presenter visible, cover hides it — and checks no early `.disappeared` resume and no hang once the UI settles (do not use the library's own helpers to compute expectations there), fuzz + reentrancy + presentation config + NavTree.current): run from the package dir —
    `cd NavTree && xcodebuild test -scheme NavTree -destination 'platform=iOS Simulator,name=...'`.
    Xcode's test navigator may show 0 tests for the NavTree scheme right after file renames; the CLI run is authoritative.
    When touching removal/continuation logic in `NavNode.swift`/`NavStack.swift`, run these before declaring done; every awaiter must resume on every removal path (didSet on `pushed`/`presented` is the single funnel — never bypass it).

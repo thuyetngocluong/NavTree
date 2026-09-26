@@ -36,6 +36,10 @@ protocol NavNode: AnyObject {
     var isVisible: Bool { get set }
     /// Node đã bị gỡ khỏi cây chưa — để onDisappear phân biệt "bị pop" với "bị che".
     var isRemoved: Bool { get set }
+    /// Màn còn hiển thị của modal mà node này vừa đóng (weak, tự hết hiệu lực khi màn đó onDisappear).
+    /// Nếu node bị gỡ ngay sau đó (cùng lượt xử lý, ví dụ dismiss rồi popToRoot), awaiter `.disappeared`
+    /// của nó vẫn phải chờ modal đang chạy animation đóng dù modal đã rời cây con.
+    var closingModalScreen: (any NavNode)? { get set }
     /// Điểm type-erase duy nhất của hệ thống — bên trong NavScreenHost đã concrete hoàn toàn.
     func erasedHost(stack: NavStack, tree: NavTree?) -> AnyView
 }
@@ -63,13 +67,18 @@ extension NavNode {
     var deepestVisibleInSubtree: (any NavNode)? {
         var visibleInChain: (any NavNode)? = nil
         var modal: NavStack? = nil
+        var closingModal: (any NavNode)? = nil
         var cursor: (any NavNode)? = self
         while let node = cursor {
             if node.isVisible { visibleInChain = node }
-            if let presented = node.presented.last { modal = presented }
+            if let presented = node.presented.last {
+                modal = presented
+            } else if let closing = node.closingModalScreen, closing.isVisible {
+                closingModal = closing          // modal đã rời cây nhưng còn đang đóng trên màn hình
+            }
             cursor = node.pushed
         }
-        return modal?.root.deepestVisibleInSubtree ?? visibleInChain
+        return modal?.root.deepestVisibleInSubtree ?? closingModal ?? visibleInChain
     }
 
     /// - Parameter handoff: màn còn hiển thị sẽ nhận awaiter `.disappeared` nếu chính node này đã khuất
@@ -153,6 +162,8 @@ final class NavScreenNode<Screen: NavScreen>: NavNode {
     @ObservationIgnored var isVisible = false
 
     @ObservationIgnored var isRemoved = false
+
+    @ObservationIgnored weak var closingModalScreen: (any NavNode)?
 
     init(_ screen: Screen) {
         self.screen = screen

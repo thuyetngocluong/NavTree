@@ -143,3 +143,39 @@ struct StalePathKillsNewScreensTests {
         #expect(stack.path.count == 2, "màn D bị path cũ xoá")
     }
 }
+
+// MARK: - Round 5: modal đã rời cây nhưng còn đang đóng
+
+@MainActor
+struct ClosingModalHandoffTests {
+
+    /// Màn chờ `.disappeared` mở một cover; code đóng cover rồi pop màn đó trong CÙNG lượt xử lý
+    /// (ví dụ reset cho deep link). Cover đã rời cây con khi màn bị gỡ, nhưng vẫn đang chạy animation đóng.
+    @Test func dismissThenPopSameTickWaitsForClosingCover() async {
+        let root = NavScreenNode(S())
+        let stack = NavStack(root: root)
+        let rootNav = Navigator(stack: stack, node: root, tree: nil)
+        let done = Flag()
+        Task {
+            await rootNav.push(S(), until: .disappeared)
+            done.value = true
+        }
+        await settle()
+        let awaited = stack.top
+        let awaitedNav = Navigator(stack: stack, node: awaited, tree: nil)
+        syncPresent(awaitedNav, .fullScreenCover)
+        let cover = awaited.presented[0]
+        awaited.isVisible = false               // bị cover che
+        cover.root.isVisible = true
+
+        Navigator(stack: cover, node: cover.root, tree: nil).dismiss()
+        rootNav.popToRoot()
+        await settle()
+        #expect(!done.value, "resume khi cover vẫn đang đóng")
+
+        cover.root.isVisible = false
+        cover.root.resumeDisappear()
+        await settle()
+        #expect(done.value)
+    }
+}

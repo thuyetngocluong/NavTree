@@ -49,6 +49,10 @@ final class NavStack: Identifiable {
         let result = pendingResult
         pendingResult = nil
 
+        // Tính trước khi gỡ cây con: màn còn hiển thị của modal này (sẽ chạy animation đóng).
+        let visibleTarget = root.deepestVisibleInSubtree
+        owner?.closingModalScreen = visibleTarget
+
         let continuations = dismissContinuations
         dismissContinuations = []
         continuations.forEach { $0.resume(returning: result) }
@@ -62,7 +66,7 @@ final class NavStack: Identifiable {
             let awaiters = disappearAwaiters
             disappearAwaiters = []
             awaiters.forEach { $0.result = result }
-            if let target = root.deepestVisibleInSubtree {
+            if let target = visibleTarget {
                 target.disappearAwaiters.append(contentsOf: awaiters)
             } else {
                 awaiters.forEach { $0.resume() }

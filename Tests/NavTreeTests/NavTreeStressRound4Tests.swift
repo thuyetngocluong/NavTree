@@ -92,6 +92,11 @@ private func subtreeHasVisible(_ node: any NavNode) -> Bool {
     return false
 }
 
+@MainActor
+private final class Flag {
+    var value = false
+}
+
 /// Một awaiter đang theo dõi. `target` là màn được push, hoặc màn gốc của modal được present.
 @MainActor
 private final class Entry {
@@ -158,6 +163,7 @@ private final class UISim {
 private func runLifecycleStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int) async {
     var rng = SeededRandom(state: seed)
     var entries: [Entry] = []
+    var resetWaits: [Flag] = []
     var zombies: [Navigator] = []
     var snapshots: [(NavStack, [AnyNavNode])] = []
     let sim = UISim()
@@ -173,7 +179,7 @@ private func runLifecycleStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int
         let pick = all[rng.next(all.count)]
         let nav = Navigator(stack: pick.stack, node: pick.node, tree: tree)
         if rng.next(4) == 0 { zombies.append(nav) }
-        let op = rng.next(14)
+        let op = rng.next(16)
         let context = "seed \(seed) step \(step) op \(op)"
 
         for entry in entries where !entry.finished {
@@ -243,8 +249,19 @@ private func runLifecycleStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int
                     #expect(tree.treeLines() == before, "zombie đổi cây — \(context)")
                 }
             }
-        default:
+        case 13:
             if rng.next(2) == 0 { syncPush(tree.current) } else { syncPresent(tree.current, styles[rng.next(3)]) }
+        case 14:
+            tree.reset(rng.next(2) == 0 ? .allTabs : .selectedTab)
+            #expect(tree.current.isPresented == false, "reset xong vẫn còn modal — \(context)")
+        default:
+            let flag = Flag()
+            resetWaits.append(flag)
+            let scope: NavResetScope = rng.next(2) == 0 ? .allTabs : .selectedTab
+            Task {
+                await tree.reset(scope, until: .disappeared)
+                flag.value = true
+            }
         }
         await settle()
 
@@ -263,6 +280,9 @@ private func runLifecycleStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int
         await settle()
 
         // Bất biến 3: UI đã ổn định → awaiter của màn đã gỡ không được treo.
+        for flag in resetWaits {
+            #expect(flag.value, "reset(until: .disappeared) treo sau khi UI ổn định — \(context)")
+        }
         for entry in entries where !entry.finished {
             if let target = entry.target {
                 #expect(!target.isRemoved, "awaiter treo sau khi màn đã gỡ và khuất — \(context)")
