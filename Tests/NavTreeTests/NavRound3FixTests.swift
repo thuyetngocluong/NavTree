@@ -2,7 +2,7 @@ import Testing
 import SwiftUI
 @testable import NavTree
 
-// Hồi quy cho hai lỗi tìm ra ở vòng stress test thứ 3.
+// Regressions for two bugs found in stress test round 3.
 
 private struct S: NavScreen {
     var body: some View { Text("s") }
@@ -23,13 +23,13 @@ private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
     nav.present(S(), as: style)
 }
 
-// MARK: - `.disappeared` resume sớm khi màn đang bị fullScreenCover che
+// MARK: - `.disappeared` resumes early when the screen is covered by a fullScreenCover
 
 @MainActor
 struct DisappearedUnderCoverTests {
 
-    /// Sheet có một cover đè lên. fullScreenCover làm màn bên dưới nhận onDisappear (isVisible = false),
-    /// nên khi đóng sheet, awaiter `.disappeared` resume ngay — trong khi cover vẫn đang chạy animation đóng.
+    /// A cover sits on the sheet. fullScreenCover gives the screen below onDisappear (isVisible = false),
+    /// so closing the sheet resumed `.disappeared` at once, while the cover was still animating closed.
     @Test func presentDisappearedWaitsForCoverOnTop() async {
         let root = NavScreenNode(S())
         let rootStack = NavStack(root: root)
@@ -44,14 +44,14 @@ struct DisappearedUnderCoverTests {
         sheet.root.isVisible = true
         syncPresent(Navigator(stack: sheet, node: sheet.root, tree: nil), .fullScreenCover)
         let cover = sheet.root.presented[0]
-        sheet.root.isVisible = false            // bị cover che → onDisappear
+        sheet.root.isVisible = false            // covered by the cover, onDisappear
         cover.root.isVisible = true
 
         Navigator(stack: sheet, node: sheet.root, tree: nil).dismiss()
         await settle()
-        #expect(!done.value, "resume khi cover vẫn đang trên màn hình")
+        #expect(!done.value, "resumed while the cover is still on screen")
 
-        cover.root.isVisible = false            // animation đóng của cover kết thúc
+        cover.root.isVisible = false            // cover's close animation ends
         cover.root.resumeDisappear()
         await settle()
         #expect(done.value)
@@ -74,9 +74,9 @@ struct DisappearedUnderCoverTests {
         pushed.isVisible = false
         cover.root.isVisible = true
 
-        rootNav.popToRoot()                     // ví dụ deep link reset về gốc
+        rootNav.popToRoot()                     // e.g. a deep link resetting to root
         await settle()
-        #expect(!done.value, "resume khi cover vẫn đang trên màn hình")
+        #expect(!done.value, "resumed while the cover is still on screen")
 
         cover.root.isVisible = false
         cover.root.resumeDisappear()
@@ -84,7 +84,7 @@ struct DisappearedUnderCoverTests {
         #expect(done.value)
     }
 
-    /// Màn chờ bị một màn push phía sau che; cả hai bị gỡ cùng lúc → chờ animation pop của màn đang hiển thị.
+    /// The awaited screen is covered by a later push; both are removed together, so wait for the visible one's pop animation.
     @Test func pushDisappearedWaitsForVisibleScreenPushedAfterIt() async {
         let root = NavScreenNode(S())
         let stack = NavStack(root: root)
@@ -113,13 +113,13 @@ struct DisappearedUnderCoverTests {
 
 }
 
-// MARK: - Path cũ từ SwiftUI xoá mất màn mới push
+// MARK: - A stale path from SwiftUI removes newly pushed screens
 
 @MainActor
 struct StalePathKillsNewScreensTests {
 
-    /// Code pop về gốc rồi push C, cùng lúc SwiftUI ghi lại path cũ [A] (A đã bị gỡ).
-    /// Setter hiện dừng ở A rồi cắt đuôi → C bị gỡ dù người dùng chưa từng thấy nó bị đóng.
+    /// Code pops to root then pushes C, while SwiftUI writes back the stale path [A] (A already removed).
+    /// The setter stopped at A and cut the tail, so C was removed though the user never saw it close.
     @Test func staleWriteKeepsScreenPushedAfterIt() {
         let root = NavScreenNode(S())
         let stack = NavStack(root: root)
@@ -128,7 +128,7 @@ struct StalePathKillsNewScreensTests {
         stack.popToRoot()
         stack.push(S())                         // C
         stack.path = stale
-        #expect(stack.path.count == 1, "màn C bị path cũ xoá")
+        #expect(stack.path.count == 1, "screen C removed by stale path")
     }
 
     @Test func staleWriteKeepsScreensAfterLivePrefix() {
@@ -137,20 +137,20 @@ struct StalePathKillsNewScreensTests {
         stack.push(S())                         // A
         stack.push(S())                         // B
         let stale = stack.path                  // [A, B]
-        stack.pop(stale[1].base)                // gỡ B
+        stack.pop(stale[1].base)                // remove B
         stack.push(S())                         // D
         stack.path = stale
-        #expect(stack.path.count == 2, "màn D bị path cũ xoá")
+        #expect(stack.path.count == 2, "screen D removed by stale path")
     }
 }
 
-// MARK: - Round 5: modal đã rời cây nhưng còn đang đóng
+// MARK: - Round 5: modal already left the tree but is still closing
 
 @MainActor
 struct ClosingModalHandoffTests {
 
-    /// Màn chờ `.disappeared` mở một cover; code đóng cover rồi pop màn đó trong CÙNG lượt xử lý
-    /// (ví dụ reset cho deep link). Cover đã rời cây con khi màn bị gỡ, nhưng vẫn đang chạy animation đóng.
+    /// A screen awaiting `.disappeared` opens a cover; code dismisses the cover then pops the screen in the SAME tick
+    /// (e.g. a deep link reset). The cover left the subtree when the screen was removed, but is still animating closed.
     @Test func dismissThenPopSameTickWaitsForClosingCover() async {
         let root = NavScreenNode(S())
         let stack = NavStack(root: root)
@@ -165,13 +165,13 @@ struct ClosingModalHandoffTests {
         let awaitedNav = Navigator(stack: stack, node: awaited, tree: nil)
         syncPresent(awaitedNav, .fullScreenCover)
         let cover = awaited.presented[0]
-        awaited.isVisible = false               // bị cover che
+        awaited.isVisible = false               // covered by the cover
         cover.root.isVisible = true
 
         Navigator(stack: cover, node: cover.root, tree: nil).dismiss()
         rootNav.popToRoot()
         await settle()
-        #expect(!done.value, "resume khi cover vẫn đang đóng")
+        #expect(!done.value, "resumed while the cover is still closing")
 
         cover.root.isVisible = false
         cover.root.resumeDisappear()

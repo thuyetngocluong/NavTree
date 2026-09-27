@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Kích thước sheet — bọc PresentationDetent để API Sendable và ổn định.
+/// Sheet height. Wraps PresentationDetent to keep the API Sendable and stable.
 public enum NavDetent: Sendable, Hashable {
     case medium
     case large
@@ -17,15 +17,15 @@ public enum NavDetent: Sendable, Hashable {
     }
 }
 
-/// Cấu hình cho một lần present (chủ yếu cho sheet / popover).
+/// Options for one presentation (mostly sheets and popovers).
 public struct NavPresentationConfig: Sendable {
 
-    /// Rỗng = mặc định của hệ thống (.large).
+    /// Empty means the system default (`.large`).
     public var detents: [NavDetent]
 
     public var dragIndicator: Visibility
 
-    /// Chặn vuốt / tap-ngoài để đóng — chỉ đóng được bằng dismiss/pop.
+    /// Blocks swipe/tap-outside dismissal; only `dismiss`/`pop` can close it.
     public var interactiveDismissDisabled: Bool
 
     public init(
@@ -41,7 +41,7 @@ public struct NavPresentationConfig: Sendable {
     public static let `default` = NavPresentationConfig()
 }
 
-/// Áp config lên NỘI DUNG được present (sheet/popover content).
+/// Applies the config to the presented CONTENT (sheet/popover).
 struct NavPresentationModifier: ViewModifier {
 
     let config: NavPresentationConfig

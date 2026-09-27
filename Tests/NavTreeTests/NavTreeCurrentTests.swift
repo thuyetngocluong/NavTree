@@ -50,7 +50,7 @@ private func rootStack(of tree: NavTree) -> NavStack {
     return stack
 }
 
-/// Mỗi case tạo NavTree riêng — không còn state toàn cục, không cần `.serialized`.
+/// Each case builds its own NavTree. No global state, so no `.serialized` needed.
 @MainActor
 struct NavTreeCurrentTests {
 
@@ -58,7 +58,7 @@ struct NavTreeCurrentTests {
         let nav = Navigator()
         #expect(nav.stack == nil)
         #expect(nav.node == nil)
-        // Mọi lệnh phải là no-op an toàn, không crash
+        // Every call must be a safe no-op, no crash
         syncPush(nav)
         nav.pop()
         nav.popToRoot()
@@ -69,7 +69,7 @@ struct NavTreeCurrentTests {
 
     @Test func treeExistsBeforeAnyViewAppears() {
         let tree = NavTree(root: RootScreen())
-        // Không cần NavRootView / onAppear — dùng được ngay sau init.
+        // No NavRootView / onAppear needed. Usable right after init.
         syncPush(tree.current)
         #expect(rootStack(of: tree).path.count == 1)
         #expect(tree.treeLines().count == 2)
@@ -101,7 +101,7 @@ struct NavTreeCurrentTests {
         #expect(tree.current.node === sheet.root)
         #expect(tree.current.isPresented)
 
-        // push/present tiếp đều áp vào ngữ cảnh sâu nhất
+        // further push/present apply to the deepest context
         syncPush(tree.current)
         #expect(sheet.path.count == 1)
         syncPresent(tree.current, .fullScreenCover)
@@ -126,9 +126,9 @@ struct NavTreeCurrentTests {
         #expect(tree.current.node === tabs[1].stack.root)
         syncPush(tree.current)
         #expect(tabs[1].stack.path.count == 1)
-        #expect(tabs[0].stack.path.count == 1) // tab A giữ nguyên stack
+        #expect(tabs[0].stack.path.count == 1) // tab A keeps its stack
 
-        // treeLines từ .current phủ cả các tab
+        // treeLines from .current covers all tabs
         #expect(tree.current.treeLines().filter { $0.contains("[tab]") }.count == 2)
     }
 
@@ -145,7 +145,7 @@ struct NavTreeCurrentTests {
     }
 
     @Test func twoTreesAreIndependent() {
-        // Hai Scene (cửa sổ) = hai cây, không ảnh hưởng nhau.
+        // Two Scenes (windows) = two independent trees.
         let a = NavTree(root: RootScreen())
         let b = NavTree(root: RootScreen())
         syncPush(a.current)
@@ -160,16 +160,16 @@ struct NavTreeCurrentTests {
         tree.selectedTab = 1
         #expect(tree.selectedTab == 1)
         #expect(tree.current.node === tree.tabs!.tabs[1].stack.root)
-        tree.selectedTab = 7   // ngoài phạm vi → bỏ qua
+        tree.selectedTab = 7   // out of range, ignored
         #expect(tree.selectedTab == 1)
-        tree.current.selectTab(0)  // đổi qua Navigator cũng phản ánh ra selectedTab
+        tree.current.selectTab(0)  // switching via Navigator also updates selectedTab
         #expect(tree.selectedTab == 0)
     }
 
     @Test func selectedTabIsObservable() {
         let tree = NavTree(root: TwoTabs())
-        // onChange là @Sendable → ghi cờ qua một box thay vì var bị capture.
-        // onChange chạy đồng bộ trong selectTab trên MainActor nên không có race thật.
+        // onChange is @Sendable, so set the flag via a box instead of a captured var.
+        // onChange runs synchronously in selectTab on MainActor, so no real race.
         final class Flag: @unchecked Sendable { var value = false }
         let fired = Flag()
         withObservationTracking {
@@ -193,7 +193,7 @@ struct NavTreeCurrentTests {
         syncPresent(tree.current, .sheet)
         let deep = tree.current
         #expect(deep.isPresented)
-        deep.selectTab(1) // đổi tab từ trong modal vẫn có tác dụng
+        deep.selectTab(1) // switching tabs from inside a modal still works
         #expect(tree.tabs!.selection == tree.tabs!.tabs[1].id)
     }
 }

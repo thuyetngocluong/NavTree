@@ -55,12 +55,12 @@ struct PresentationConfigTests {
         let popover = stack.root.presented[0]
         #expect(popover.style == .popover)
 
-        // Present tiếp khi popover đang mở → forward xuống leaf của popover
+        // Presenting while the popover is open forwards to the popover's leaf
         syncPresent(nav, .sheet)
         #expect(stack.root.presented.count == 1)
         #expect(popover.root.presented.first?.style == .sheet)
 
-        // Dismiss popover → cả sheet lồng bên trong chết theo, awaiter nhận kết quả
+        // Dismissing the popover also removes the nested sheet; the awaiter gets the result
         let popNav = Navigator(stack: popover, node: popover.root, tree: nil)
         popNav.dismiss(returning: "pop-done")
         let result = await task.value

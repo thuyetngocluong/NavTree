@@ -25,7 +25,7 @@ private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
     nav.present(DummyScreen(), as: style)
 }
 
-// MARK: - Vòng đời: cây bị huỷ khi còn awaiter treo
+// MARK: - Lifetime: tree released while awaiters are pending
 
 @MainActor
 struct LifetimeTests {
@@ -47,7 +47,7 @@ struct LifetimeTests {
         await settle()
         #expect(weakRoot == nil)
         #expect(weakPushed == nil)
-        // Chỉ await khi đã giải phóng — nếu vòng tham chiếu quay lại, test fail thay vì treo.
+        // Await only once released. If a retain cycle returns, the test fails instead of hanging.
         if weakPushed == nil {
             #expect(await task.value == nil)
         }
@@ -83,7 +83,7 @@ struct LifetimeTests {
             nav = tree.current
         }
         #expect(weakTree == nil)
-        // Navigator mồ côi: mọi lệnh là no-op an toàn.
+        // Orphaned Navigator: every call is a safe no-op.
         syncPush(nav)
         nav.pop()
         nav.dismiss()
@@ -91,13 +91,13 @@ struct LifetimeTests {
     }
 }
 
-// MARK: - Present chuyển tiếp theo cả stack, không chỉ theo màn đang gọi
+// MARK: - Present forwards by the whole stack, not just the calling screen
 
 @MainActor
 struct PresentForwardingTests {
 
     @Test func presentFromCoveredScreenForwardsIntoExistingModal() {
-        // A push B, B mở sheet; navigator của A (bị che) present tiếp.
+        // A pushes B, B opens a sheet; covered A's navigator presents again.
         let a = NavScreenNode(DummyScreen())
         let stack = NavStack(root: a)
         let navA = Navigator(stack: stack, node: a, tree: nil)
@@ -107,12 +107,12 @@ struct PresentForwardingTests {
         let sheet = stack.top.presented[0]
 
         syncPresent(navA, .sheet)
-        #expect(a.presented.isEmpty)                 // không gắn vào A — SwiftUI sẽ bỏ qua
-        #expect(sheet.root.presented.count == 1)     // chuyển tiếp vào sheet đang mở
+        #expect(a.presented.isEmpty)                 // not attached to A, SwiftUI would ignore it
+        #expect(sheet.root.presented.count == 1)     // forwarded into the open sheet
     }
 
     @Test func presentFromScreenAboveModalOwnerForwards() {
-        // A mở sheet, rồi push B bên dưới sheet; navigator của B present tiếp.
+        // A opens a sheet, then pushes B under it; B's navigator presents again.
         let a = NavScreenNode(DummyScreen())
         let stack = NavStack(root: a)
         let navA = Navigator(stack: stack, node: a, tree: nil)
@@ -148,7 +148,7 @@ struct PresentForwardingTests {
         let rootNav = Navigator(stack: rootStack, node: rootStack.root, tree: tree)
         syncPresent(rootNav, .sheet)
         let sheet = rootStack.root.presented[0]
-        syncPush(rootNav) // push bên dưới sheet → màn gốc không còn là top
+        syncPush(rootNav) // push under the sheet, root screen is no longer top
         #expect(tree.current.node === sheet.root)
     }
 }

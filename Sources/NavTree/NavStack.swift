@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Cách một stack được present lên — tương tự `modalPresentationStyle` của UIKit.
+/// How a stack is presented, like UIKit's `modalPresentationStyle`.
 public enum NavPresentationStyle: String, Sendable {
     case sheet
     case fullScreenCover
     case popover
 }
 
-/// Một `NavigationStack`: màn gốc `root` và chuỗi `pushed` phía sau nó.
-/// Stack gốc của app có `style == nil`; stack được present có `style` và `owner` là node đã present nó.
+/// One `NavigationStack`: a `root` screen and the `pushed` chain after it.
+/// Root stacks have `style == nil`; presented stacks have a `style` and an `owner` (the presenting node).
 @MainActor
 @Observable
 final class NavStack: Identifiable {
@@ -16,19 +16,18 @@ final class NavStack: Identifiable {
     let id = UUID()
     let style: NavPresentationStyle?
     weak var owner: (any NavNode)?
-    /// TabView chứa stack này (chỉ có ở stack gốc của một tab).
+    /// The TabView holding this stack (tab root stacks only).
     @ObservationIgnored weak var tabs: NavTabs?
     let root: any NavNode
     let config: NavPresentationConfig
 
-    /// Continuation của các `await present` đang chờ stack này bị dismiss.
-    /// Giá trị resume là `any Sendable` type-erased — bên gọi `await` tự cast về type mong đợi.
+    /// `await present` callers waiting for this stack to be dismissed.
     @ObservationIgnored var dismissContinuations: [CheckedContinuation<(any Sendable)?, Never>] = []
 
-    /// Awaiter của các `await present(until: .disappeared)` — resume sau khi animation đóng xong.
+    /// `await present(until: .disappeared)` callers, resumed after the close animation.
     @ObservationIgnored var disappearAwaiters: [NavDisappearAwaiter] = []
 
-    /// Kết quả sẽ trả cho awaiter khi stack bị dismiss (set bởi dismiss(returning:)).
+    /// Result handed to awaiters on dismissal (set by `dismiss(returning:)`).
     @ObservationIgnored var pendingResult: (any Sendable)? = nil
 
     init(root: any NavNode, style: NavPresentationStyle? = nil, owner: (any NavNode)? = nil, config: NavPresentationConfig = .default) {
@@ -39,17 +38,17 @@ final class NavStack: Identifiable {
     }
 
     deinit {
-        // Lưới an toàn: cây bị deallocate khi vẫn còn awaiter treo.
+        // Safety net: released while awaiters are still pending.
         dismissContinuations.forEach { $0.resume(returning: nil) }
         disappearAwaiters.forEach { $0.resume() }
     }
 
-    /// Stack vừa bị gỡ khỏi node cha: resume awaiter của stack + toàn bộ subtree bên trong.
+    /// This stack was just removed from its owner: resume its awaiters and its whole subtree.
     func resumeRemovedStack() {
         let result = pendingResult
         pendingResult = nil
 
-        // Tính trước khi gỡ cây con: màn còn hiển thị của modal này (sẽ chạy animation đóng).
+        // Before tearing down: the visible screen of this modal (it is about to animate out).
         let visibleTarget = root.deepestVisibleInSubtree
         owner?.closingModalScreen = visibleTarget
 
@@ -57,11 +56,9 @@ final class NavStack: Identifiable {
         dismissContinuations = []
         continuations.forEach { $0.resume(returning: result) }
 
-        // Pha disappeared: chuyển awaiter sang màn sâu nhất còn hiển thị trong cây con của stack —
-        // gồm cả modal đè lên nó (một fullScreenCover làm màn bên dưới nhận onDisappear sớm,
-        // nên chỉ nhìn màn trên cùng của stack sẽ resume khi cover vẫn đang chạy animation đóng).
-        // onDisappear của màn đó chính là lúc animation đóng kết thúc.
-        // Không màn nào hiển thị (stack bị gỡ khi đang bị che hẳn) thì resume luôn.
+        // `.disappeared`: hand awaiters to the deepest visible screen in the subtree, including a modal
+        // on top (a fullScreenCover hides the screens below early). Its onDisappear marks the end of
+        // the close animation. Nothing visible (stack was fully covered): resume now.
         if !disappearAwaiters.isEmpty {
             let awaiters = disappearAwaiters
             disappearAwaiters = []
@@ -76,9 +73,8 @@ final class NavStack: Identifiable {
         root.resumeRemovedSubtree()
     }
 
-    /// Modal đang được present từ stack này, bất kể màn nào trong chuỗi push đã present nó.
-    /// Một NavigationStack chỉ present được một modal tại một thời điểm, nên phải xét cả chuỗi,
-    /// không chỉ màn trên cùng hay màn đang gọi.
+    /// The modal presented from any screen of this stack's push chain.
+    /// A NavigationStack can present only one modal at a time, so the whole chain counts.
     var presentedModal: NavStack? {
         var found: NavStack? = nil
         var node: (any NavNode)? = root
@@ -89,35 +85,34 @@ final class NavStack: Identifiable {
         return found
     }
 
-    /// Modal đang che ngữ cảnh của stack này: stack của một tab thì xét cả TabView
-    /// (modal do tab khác mở vẫn che tab này), stack thường thì xét chính nó.
+    /// The modal covering this stack. For a tab stack the whole TabView counts,
+    /// since a modal opened from another tab covers this one too.
     var coveringModal: NavStack? {
         tabs?.presentedModal ?? presentedModal
     }
 
-    /// Node nên nhận lệnh present khi `node` (thuộc stack này) muốn present:
-    /// ngữ cảnh đang bị modal che thì chuyển tiếp vào modal đó (đệ quy tới tầng sâu nhất, về màn trên cùng của nó);
-    /// chưa có thì chính `node`.
+    /// Where a present from `node` (in this stack) should land: inside the covering modal,
+    /// recursively down to the deepest one's top screen; otherwise `node` itself.
     func topmostPresenter(from node: any NavNode) -> any NavNode {
         guard let modal = coveringModal else { return node }
         return modal.topmostPresenter(from: modal.top)
     }
 
-    /// Stack sâu nhất đang hiển thị tính từ stack này (đi theo modal che phủ từng tầng).
+    /// The deepest visible stack, following covering modals down.
     var deepestVisibleStack: NavStack {
         var stack = self
         while let modal = stack.coveringModal { stack = modal }
         return stack
     }
 
-    /// Màn trên cùng của stack (cuối chuỗi pushed).
+    /// The top screen (end of the pushed chain).
     var top: any NavNode {
         var node: any NavNode = root
         while let next = node.pushed { node = next }
         return node
     }
 
-    /// Chuỗi `pushed` tính từ root; set (khi hệ thống pop/back) gắn lại chuỗi theo path mới.
+    /// The pushed chain after root. SwiftUI sets it on back gestures; the setter relinks the chain.
     var path: [AnyNavNode] {
         get {
             var result: [AnyNavNode] = []
@@ -129,14 +124,13 @@ final class NavStack: Identifiable {
             return result
         }
         set {
-            // SwiftUI có thể ghi lại một path dựng từ giao diện đã cũ (ví dụ code pop rồi push màn mới
-            // đúng lúc người dùng vuốt back). Path chứa màn đã bị gỡ là path cũ → bỏ qua cả lần ghi:
-            // gắn lại màn đã gỡ thì nó hiện ra với nút chết, còn cắt đuôi thì xoá mất màn vừa push.
-            // Model là nguồn sự thật; SwiftUI sẽ đọc lại path từ getter.
+            // A path containing a removed screen was built from stale UI (e.g. code popped and pushed
+            // while the user swiped back). Ignore the whole write: re-attaching would show a dead screen,
+            // truncating would drop the new one. The model wins; SwiftUI re-reads the getter.
             guard !newValue.contains(where: { $0.base.isRemoved }) else { return }
             var current: any NavNode = root
             for wrapper in newValue {
-                // So sánh identity để không bắn thông báo Observation thừa khi SwiftUI ghi lại path y hệt.
+                // Skip identical assignments to avoid spurious Observation updates.
                 if current.pushed !== wrapper.base {
                     current.pushed = wrapper.base
                 }
@@ -152,7 +146,7 @@ final class NavStack: Identifiable {
         top.push(screen)
     }
 
-    /// Pop node là root của stack present → dismiss cả stack; root của stack gốc → no-op.
+    /// Popping a presented stack's root dismisses the stack; popping a root stack's root is a no-op.
     func pop(_ node: any NavNode, returning result: (any Sendable)? = nil) {
         node.pendingResult = result
         if node === root {

@@ -8,7 +8,7 @@ private struct DummyScreen: NavScreen {
     var body: some View { Text("dummy") }
 }
 
-/// Cho task con (await push/present) chạy tới điểm suspension trên MainActor.
+/// Let child tasks (await push/present) run to their suspension point on MainActor.
 @MainActor
 private func settle() async {
     for _ in 0..<20 { await Task.yield() }
@@ -27,7 +27,7 @@ private func navigator(for node: any NavNode, in stack: NavStack) -> Navigator {
     Navigator(stack: stack, node: node, tree: nil)
 }
 
-// Helper sync để gọi đúng overload không-async từ trong hàm test async.
+// Sync helper to call the non-async overload from an async test.
 @MainActor
 private func syncPush(_ nav: Navigator) {
     nav.push(DummyScreen())
@@ -38,7 +38,7 @@ private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
     nav.present(DummyScreen(), as: style)
 }
 
-// LCG tất định để fuzz có thể tái lập.
+// Deterministic LCG so fuzz runs are reproducible.
 private struct SeededRandom {
     var state: UInt64
     mutating func next(_ bound: Int) -> Int {
@@ -47,7 +47,7 @@ private struct SeededRandom {
     }
 }
 
-// MARK: - Cấu trúc cây
+// MARK: - Tree structure
 
 @MainActor
 struct TreeStructureTests {
@@ -87,14 +87,14 @@ struct TreeStructureTests {
         stack.push(DummyScreen())
         let node = stack.path[0].base
         stack.pop(node)
-        stack.pop(node) // lần 2: node đã ra khỏi cây
+        stack.pop(node) // 2nd time: node already left the tree
         #expect(stack.path.isEmpty)
     }
 
     @Test func presentForwardsToDeepestLeaf() {
         let (stack, nav) = makeStack()
         nav.present(DummyScreen(), as: .sheet)
-        nav.present(DummyScreen(), as: .sheet) // node gốc đã có sheet → forward xuống leaf
+        nav.present(DummyScreen(), as: .sheet) // root already has a sheet, forwards to leaf
         let firstSheet = stack.root.presented.first
         #expect(stack.root.presented.count == 1)
         #expect(firstSheet?.root.presented.count == 1)
@@ -188,7 +188,7 @@ struct AwaitTests {
         await settle()
         let sheet = stack.root.presented[0]
         let sheetNav = navigator(for: sheet.root, in: sheet)
-        sheetNav.pop(returning: "via-pop") // pop ở màn đầu nhánh present = dismiss
+        sheetNav.pop(returning: "via-pop") // pop at a presented stack's root = dismiss
         let result = await task.value
         #expect(result as? String == "via-pop")
         #expect(stack.root.presented.isEmpty)
@@ -290,7 +290,7 @@ struct AwaitTests {
     }
 }
 
-// MARK: - Fuzz tất định
+// MARK: - Deterministic fuzz
 
 @MainActor
 struct FuzzTests {

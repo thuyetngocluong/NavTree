@@ -62,14 +62,14 @@ struct NavResetTests {
         syncPush(tree.current)                          // tab A: push
         tree.selectTab(1)
         syncPush(tree.current)                          // tab B: push
-        syncPresent(tree.current, .sheet)               // sheet che TabView
-        syncPush(tree.current)                          // push trong sheet
+        syncPresent(tree.current, .sheet)               // sheet covers TabView
+        syncPush(tree.current)                          // push inside sheet
 
         tree.reset()
         #expect(tabStack(0, of: tree).path.isEmpty)
         #expect(tabStack(1, of: tree).path.isEmpty)
         #expect(tree.tabs!.presentedModal == nil)
-        #expect(tree.selectedTab == 1)                  // tab giữ nguyên
+        #expect(tree.selectedTab == 1)                  // tab unchanged
         #expect(tree.current.node === tabStack(1, of: tree).root)
     }
 
@@ -86,8 +86,8 @@ struct NavResetTests {
 
     @Test func selectedTabScopeStillClosesModalFromOtherTab() {
         let tree = NavTree(root: TwoTabs())
-        syncPresent(tree.current, .fullScreenCover)     // cover mở từ tab A
-        tree.selectTab(1)                               // cover vẫn che màn hình
+        syncPresent(tree.current, .fullScreenCover)     // cover opened from tab A
+        tree.selectTab(1)                               // cover still covers the screen
 
         tree.reset(.selectedTab)
         #expect(tree.tabs!.presentedModal == nil)
@@ -120,7 +120,7 @@ struct NavResetTests {
         syncPresent(tree.current, .sheet)
         syncPush(tree.current)
 
-        // Deep link: "mở tab A, đẩy màn chi tiết".
+        // Deep link: "open tab A, push the detail screen".
         tree.reset()
         tree.selectedTab = 0
         syncPush(tree.current)
@@ -135,7 +135,7 @@ struct NavResetTests {
         let tree = NavTree(root: TwoTabs())
         let before = tree.treeLines()
         tree.reset()
-        await tree.reset(until: .disappeared)          // không có gì hiển thị bị gỡ → trả về ngay
+        await tree.reset(until: .disappeared)          // nothing visible removed, returns at once
         #expect(tree.treeLines() == before)
     }
 
@@ -147,7 +147,7 @@ struct NavResetTests {
         let sheet = tabStack(0, of: tree).root.presented[0]
         syncPresent(Navigator(stack: sheet, node: sheet.root, tree: tree), .fullScreenCover)
         let cover = sheet.root.presented[0]
-        // Như SwiftUI: sheet giữ màn gốc tab hiển thị, cover làm màn sheet khuất.
+        // Like SwiftUI: the tab root stays visible under the sheet, the cover hides the sheet.
         tabStack(0, of: tree).root.isVisible = true
         sheet.root.isVisible = false
         cover.root.isVisible = true
@@ -158,10 +158,10 @@ struct NavResetTests {
             done.value = true
         }
         await settle()
-        #expect(tree.tabs!.presentedModal == nil)       // đã gỡ ngay
-        #expect(!done.value)                            // nhưng cover còn đang đóng
+        #expect(tree.tabs!.presentedModal == nil)       // removed at once
+        #expect(!done.value)                            // but the cover is still closing
 
-        cover.root.isVisible = false                    // onDisappear của cover
+        cover.root.isVisible = false                    // cover's onDisappear
         cover.root.resumeDisappear()
         await settle()
         #expect(done.value)
@@ -197,7 +197,7 @@ struct NavResetTests {
     @Test func resetWaitDoesNotHangWhenClosingScreenIsReleased() async {
         let tree = NavTree(root: R())
         syncPush(tree.current)
-        var view: (any NavNode)? = tree.current.node    // "view" đang giữ màn
+        var view: (any NavNode)? = tree.current.node    // "view" holding the screen
         view?.isVisible = true
 
         let done = Flag()
@@ -207,9 +207,9 @@ struct NavResetTests {
         }
         await settle()
         #expect(!done.value)
-        view = nil                                      // view bị huỷ mà không có onDisappear
+        view = nil                                      // view released without onDisappear
         await settle()
-        #expect(done.value)                             // deinit resume, không treo
+        #expect(done.value)                             // deinit resumes, no hang
         _ = view
     }
 }

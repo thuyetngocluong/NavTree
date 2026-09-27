@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Phạm vi của `NavTree.reset`.
+/// What `NavTree.reset` pops.
 public enum NavResetScope: Sendable {
-    /// Pop mọi tab về gốc (như vừa mở app).
+    /// Pop every tab to its root, as on a fresh launch.
     case allTabs
-    /// Chỉ pop tab đang chọn; các tab khác giữ nguyên stack. Modal đang che màn hình vẫn bị đóng.
+    /// Pop only the selected tab; other tabs keep their stacks. The covering modal is still closed.
     case selectedTab
 }
 
-/// Tham chiếu weak tới một node — để chờ màn đóng mà không giữ nó sống.
+/// Weak node reference, to wait for a screen to close without keeping it alive.
 @MainActor
 struct NavWeakNode {
     weak var node: (any NavNode)?
@@ -18,12 +18,10 @@ struct NavWeakNode {
     }
 }
 
-/// Toàn bộ cây điều hướng của một Scene — gốc là một NavStack (app không tab)
-/// hoặc một NavTabs (app có tab bar).
+/// The whole navigation tree of one window. Its root is a NavStack (no tab bar) or NavTabs (tab bar).
 ///
-/// Tạo ở tầng App (hoặc bất kỳ nơi nào sống lâu hơn view) rồi đưa vào `NavRootView(tree:)`.
-/// Cây tồn tại ngay từ lúc khởi tạo, nên deep link / push notification / view model
-/// dùng được trước cả khi màn đầu xuất hiện. Mỗi cửa sổ (Scene) nên có một NavTree riêng.
+/// Create it in a view inside `WindowGroup` and pass it to `NavRootView(tree:)`, one tree per window.
+/// It works from `init`, so deep links, notifications and view models can use it before any screen appears.
 @MainActor
 @Observable
 public final class NavTree {
@@ -35,12 +33,12 @@ public final class NavTree {
 
     let root: Root
 
-    /// App không tab bar: gốc là một NavigationStack.
+    /// App without a tab bar: the root is one NavigationStack.
     public init(root screen: some NavRootScreen) {
         root = .stack(NavStack(root: NavScreenNode(screen)))
     }
 
-    /// App có tab bar: gốc là TabView, mỗi tab một NavigationStack riêng.
+    /// App with a tab bar: the root is a TabView with one NavigationStack per tab.
     public init(root tabBar: some NavTabBarScreen) {
         root = .tabs(NavTabs(tabs: tabBar.content.map { Self.makeTab($0) }))
     }
@@ -54,7 +52,7 @@ public final class NavTree {
         return nil
     }
 
-    /// Stack đang là ngữ cảnh gốc của người dùng: stack gốc, hoặc stack của tab đang chọn.
+    /// The root stack, or the selected tab's stack.
     private var activeRootStack: NavStack? {
         switch root {
         case .stack(let stack): stack
@@ -62,19 +60,18 @@ public final class NavTree {
         }
     }
 
-    /// Navigator của ngữ cảnh người dùng đang thấy: tab đang chọn → modal sâu nhất → màn trên cùng.
+    /// Navigator for what the user is looking at: selected tab, then deepest modal, then top screen.
     ///
-    /// Dùng khi không có `@Environment` (deep link, notification, view model).
-    /// Trong view luôn ưu tiên `@Environment(\.navigator)`.
+    /// For code without `@Environment` (deep links, notifications, view models).
+    /// Inside views prefer `@Environment(\.navigator)`.
     public var current: Navigator {
         guard let rootStack = activeRootStack else { return Navigator(tree: self) }
         let stack = rootStack.deepestVisibleStack
         return Navigator(stack: stack, node: stack.top, tree: self)
     }
 
-    /// Index của tab đang chọn. Quan sát được (Observation), nên dùng được với
-    /// `onChange(of: tree.selectedTab)` hoặc bind qua `$tree.selectedTab`.
-    /// Gán index ngoài phạm vi thì bị bỏ qua. Gốc không phải tab bar: luôn là 0, gán là no-op.
+    /// Index of the selected tab. Observable, so `onChange(of: tree.selectedTab)` works.
+    /// Out-of-range values are ignored. Without a tab bar it is always 0 and setting it does nothing.
     public var selectedTab: Int {
         get {
             guard let tabs else { return 0 }
@@ -85,34 +82,34 @@ public final class NavTree {
         }
     }
 
-    /// Chuyển tab theo index (chỉ có tác dụng khi gốc là tab bar).
+    /// Selects a tab by index (tab bar roots only).
     public func selectTab(_ index: Int) {
         guard let tabs, tabs.tabs.indices.contains(index) else { return }
         tabs.selection = tabs.tabs[index].id
     }
 
-    // MARK: - Reset (deep link / universal link / push notification)
+    // MARK: - Reset (deep links, universal links, notifications)
 
-    /// Đưa cây về trạng thái sạch: đóng modal đang che màn hình và pop các stack về màn gốc.
-    /// Tab đang chọn giữ nguyên — deep link tự chọn tab sau đó.
+    /// Returns the tree to a clean state: closes the covering modal and pops stacks to their root.
+    /// The selected tab is kept; set `selectedTab` afterwards.
     ///
-    /// Mọi `await push/present` trong phần bị gỡ đều resume với `nil`.
-    /// Muốn present ngay sau khi reset, dùng `reset(_:until: .disappeared)` để chờ animation đóng xong,
-    /// tránh lỗi "modal mới không hiện" của SwiftUI. Push ngay sau reset thì không cần chờ.
+    /// Pending `await push/present` calls in the removed part resume with `nil`.
+    /// To present right after, use `reset(_:until: .disappeared)` so SwiftUI doesn't drop the new modal.
+    /// Pushing right after needs no wait.
     public func reset(_ scope: NavResetScope = .allTabs) {
         _ = performReset(scope)
     }
 
-    /// Như `reset(_:)`, rồi treo cho tới khi (với `.disappeared`) mọi màn đang hiển thị bị gỡ
-    /// đã chạy xong animation đóng. `.removed` trả về ngay sau khi gỡ.
+    /// Like `reset(_:)`. With `.disappeared` it returns once every visible screen it removed has
+    /// finished animating out; with `.removed` it returns right away.
     ///
-    /// Chỉ giữ weak các màn cần chờ: màn bị giải phóng (view đã mất, cây bị huỷ) thì không chờ nữa.
+    /// Waits on weak references only, so a released screen (view gone, window closed) ends the wait.
     public func reset(_ scope: NavResetScope = .allTabs, until moment: NavAwaitUntil) async {
         let closing = performReset(scope)
         guard moment == .disappeared else { return }
         for ref in closing {
             _ = await withCheckedContinuation { (continuation: CheckedContinuation<(any Sendable)?, Never>) in
-                // Màn đã khuất (hoặc đã giải phóng) trong lúc chờ màn trước → không còn gì để chờ.
+                // Already hidden or released while waiting for an earlier one: nothing to wait for.
                 guard let node = ref.node, node.isVisible else {
                     continuation.resume(returning: nil)
                     return
@@ -122,7 +119,7 @@ public final class NavTree {
         }
     }
 
-    /// Gỡ modal che màn hình + pop stack theo `scope`. Trả về các màn đang hiển thị vừa bị gỡ (weak).
+    /// Closes the covering modal and pops stacks per `scope`. Returns the visible screens it removed (weak).
     private func performReset(_ scope: NavResetScope) -> [NavWeakNode] {
         let visibleBefore = allNodes().filter(\.isVisible).map(NavWeakNode.init)
 
@@ -137,7 +134,7 @@ public final class NavTree {
             case .allTabs: stacks = tabs.tabs.map(\.stack)
             case .selectedTab: stacks = tabs.selectedTab.map { [$0.stack] } ?? []
             }
-            // Modal che cả TabView dù do tab nào mở, nên luôn đóng nó, kể cả với `.selectedTab`.
+            // A modal covers the whole TabView whichever tab opened it, so always close it.
             covering = tabs.presentedModal
         }
         covering?.dismissSelf()
@@ -146,7 +143,7 @@ public final class NavTree {
         return visibleBefore.filter { $0.node?.isRemoved == true }
     }
 
-    /// Mọi node còn trong cây.
+    /// Every node currently in the tree.
     private func allNodes() -> [any NavNode] {
         var out: [any NavNode] = []
         func visit(_ stack: NavStack) {
@@ -164,7 +161,7 @@ public final class NavTree {
         return out
     }
 
-    /// Toàn bộ cây điều hướng, dạng text để quan sát / debug.
+    /// The whole tree as text, for debugging.
     public func treeLines() -> [String] {
         switch root {
         case .stack(let stack): stack.treeLines()

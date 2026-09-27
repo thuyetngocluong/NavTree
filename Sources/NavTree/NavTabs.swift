@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Một tab: metadata hiển thị + NavStack riêng của tab đó.
+/// One tab: its display metadata and its own NavStack.
 @MainActor
 final class NavTab: Identifiable {
 
@@ -16,7 +16,7 @@ final class NavTab: Identifiable {
     }
 }
 
-/// Một `TabView`: nhiều NavStack đứng cạnh nhau, mỗi tab một stack, và tab đang chọn.
+/// One `TabView`: a NavStack per tab, plus the selected tab.
 @MainActor
 @Observable
 final class NavTabs {
@@ -36,10 +36,9 @@ final class NavTabs {
         tabs.first { $0.id == selection } ?? tabs.first
     }
 
-    /// Modal đang che TabView, bất kể tab nào đã present nó.
-    /// Modal che cả tab bar, nên cả TabView chỉ present được một modal tại một thời điểm;
-    /// đổi tab khi modal đang mở thì modal vẫn nằm trên màn hình (đã xác nhận trên simulator).
-    /// Ưu tiên tab đang chọn nếu (bất thường) có nhiều hơn một.
+    /// The modal covering the TabView, whichever tab presented it.
+    /// A modal covers the tab bar, so the whole TabView shows one at a time, and switching tabs
+    /// leaves it on screen (verified on simulator). Prefers the selected tab if there were ever two.
     var presentedModal: NavStack? {
         if let modal = selectedTab?.stack.presentedModal { return modal }
         return tabs.lazy.compactMap { $0.stack.presentedModal }.first

@@ -45,7 +45,7 @@ private func rootNavigator(ofTab index: Int, in tree: NavTree) -> Navigator {
     return Navigator(stack: stack, node: stack.root, tree: tree)
 }
 
-// MARK: - Modal che cả TabView, không chỉ tab đã mở nó
+// MARK: - A modal covers the whole TabView, not just the tab that opened it
 
 @MainActor
 struct CrossTabModalTests {
@@ -56,7 +56,7 @@ struct CrossTabModalTests {
         syncPresent(tree.current, .sheet)
         let sheet = tree.tabs!.tabs[1].stack.root.presented[0]
 
-        tree.selectTab(0) // modal vẫn nằm trên màn hình dù đã đổi tab
+        tree.selectTab(0) // modal stays on screen after switching tabs
         #expect(tree.selectedTab == 0)
         #expect(tree.current.node === sheet.root)
         #expect(tree.current.isPresented)
@@ -67,7 +67,7 @@ struct CrossTabModalTests {
         syncPresent(rootNavigator(ofTab: 1, in: tree), .sheet)
         let sheet = tree.tabs!.tabs[1].stack.root.presented[0]
 
-        // Màn gốc tab 0 present trong khi sheet của tab 1 đang che TabView.
+        // Tab 0 root presents while tab 1's sheet covers the TabView.
         syncPresent(rootNavigator(ofTab: 0, in: tree), .fullScreenCover)
         #expect(tree.tabs!.tabs[0].stack.root.presented.isEmpty)
         #expect(sheet.root.presented.first?.style == .fullScreenCover)
@@ -82,7 +82,7 @@ struct CrossTabModalTests {
         tree.selectedTab = 0
         syncPush(tree.current)
         #expect(sheet.path.count == 1)
-        #expect(tree.tabs!.tabs[0].stack.path.isEmpty) // không push vào tab bị che
+        #expect(tree.tabs!.tabs[0].stack.path.isEmpty) // no push into the covered tab
     }
 
     @Test func pushInsideTabStillWorksWithoutModal() {
@@ -94,7 +94,7 @@ struct CrossTabModalTests {
     }
 }
 
-// MARK: - Navigator zombie không được pop / dismiss
+// MARK: - A zombie Navigator must not pop / dismiss
 
 @MainActor
 struct ZombieGuardTests {
@@ -102,11 +102,11 @@ struct ZombieGuardTests {
     @Test func zombieDismissDoesNotCloseCurrentSheet() {
         let tree = NavTree(root: RootScreen())
         syncPresent(tree.current, .sheet)
-        syncPush(tree.current)                 // B trong sheet
+        syncPush(tree.current)                 // B inside sheet
         let navB = tree.current
-        navB.pop()                             // người dùng pop B
-        navB.dismiss(returning: "late")        // Task cũ gọi dismiss muộn
-        #expect(tree.current.isPresented)      // sheet vẫn mở
+        navB.pop()                             // user pops B
+        navB.dismiss(returning: "late")        // old Task calls dismiss late
+        #expect(tree.current.isPresented)      // sheet still open
     }
 
     @Test func zombiePopToRootKeepsNewScreens() {
@@ -115,7 +115,7 @@ struct ZombieGuardTests {
         syncPush(tree.current)                 // B
         let navB = tree.current
         navB.pop()
-        syncPush(tree.current)                 // C, mở sau khi B bị gỡ
+        syncPush(tree.current)                 // C, opened after B was removed
         syncPush(tree.current)                 // D
         navB.popToRoot()
         #expect(stack.path.count == 2)
@@ -133,7 +133,7 @@ struct ZombieGuardTests {
     }
 }
 
-// MARK: - SwiftUI ghi lại path cũ
+// MARK: - SwiftUI writes back a stale path
 
 @MainActor
 struct StalePathWriteTests {
@@ -145,7 +145,7 @@ struct StalePathWriteTests {
         stack.push(DummyScreen())
         let stale = stack.path
         stack.popToRoot()
-        stack.path = stale                      // ghi muộn từ SwiftUI
+        stack.path = stale                      // late write from SwiftUI
         #expect(stack.path.isEmpty)
     }
 
@@ -156,7 +156,7 @@ struct StalePathWriteTests {
         stack.push(DummyScreen())
         stack.push(DummyScreen())
         let stale = stack.path
-        stack.pop(stale[1].base)                // gỡ màn thứ 2 và 3
+        stack.pop(stale[1].base)                // removes screens 2 and 3
         stack.path = stale
         #expect(stack.path.count == 1)
         #expect(stack.path.first?.id == stale[0].id)

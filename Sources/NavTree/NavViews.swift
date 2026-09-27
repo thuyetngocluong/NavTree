@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// Gốc duy nhất của mọi view trong một Scene. Tự chọn cách render theo gốc của cây:
-/// NavigationStack cho app không tab, TabView (mỗi tab một stack) cho app có tab bar.
+/// The single root view of a window. Renders a NavigationStack, or a TabView with one stack per tab.
 ///
-/// - `init(tree:)`: cây do bên ngoài tạo và giữ (App, coordinator) — dùng được từ trước khi view xuất hiện.
-/// - `init(root:)`: đường tắt, view tự tạo và giữ cây.
+/// - `init(tree:)`: you own the tree (e.g. a scene root view), usable before any view appears.
+/// - `init(root:)`: shortcut, the view creates and owns the tree.
 public struct NavRootView: View {
 
     private let externalTree: NavTree?
 
-    /// Chỉ có giá trị khi view tự tạo cây. Cây truyền từ ngoài KHÔNG được lưu vào @State:
-    /// @State giữ giá trị lần đầu mãi mãi, nên đổi sang cây mới (đăng xuất…) sẽ giữ cây cũ sống
-    /// cùng mọi awaiter đang treo trong đó.
+    /// Set only when the view owns the tree. An external tree must NOT go into @State:
+    /// @State keeps its first value forever, so swapping trees (e.g. logout) would keep the old one alive.
     @State private var ownedTree: NavTree?
 
     @MainActor
@@ -33,7 +31,7 @@ public struct NavRootView: View {
     }
 
     public var body: some View {
-        // Luôn có một trong hai: init(tree:) set externalTree, init(root:) set ownedTree.
+        // Exactly one is set: init(tree:) sets externalTree, init(root:) sets ownedTree.
         if let tree = externalTree ?? ownedTree {
             Group {
                 switch tree.root {
@@ -43,15 +41,12 @@ public struct NavRootView: View {
                     NavTabsView(tabs: tabs)
                 }
             }
-            // Navigator "hạt giống" chỉ mang tree — NavStackView / NavScreenHost bổ sung phần còn lại.
-            // Cây KHÔNG được đưa vào environment bằng tham chiếu mạnh (`.environment(tree)`):
-            // UIKit/SwiftUI chụp environment vào cache (trait collection của thanh nổi, initialEnvironment
-            // của NavigationStack) và giữ bản chụp đó lâu hơn view. Đọc cây qua `\.navTree` (weak).
+            // Seed navigator carries only the tree; NavStackView / NavScreenHost fill in the rest.
+            // Never inject the tree strongly with `.environment(tree)`: SwiftUI/UIKit cache environment
+            // snapshots beyond the views' lifetime, which kept old trees alive. Read it via `\.navTree` (weak).
             .environment(\.navigator, Navigator(tree: tree))
-            // Cây mới = hệ thống điều hướng mới: không tái sử dụng NavigationStack / TabView của cây cũ.
-            // NavigationStack (UIKitNavigationController) chụp environment lúc tạo và giữ suốt đời
-            // (`navigationAuthority.initialEnvironment`, đo bằng `leaks --traceTree`), nên tái sử dụng
-            // nó sẽ mang theo trạng thái của cây cũ.
+            // New tree, new hierarchy: never reuse the old NavigationStack/TabView, which keeps
+            // the environment it was created with (found with `leaks --traceTree`).
             .id(ObjectIdentifier(tree))
         }
     }
@@ -81,8 +76,8 @@ struct NavStackView: View {
     @Environment(\.navigator) private var parentNav
 
     var body: some View {
-        // Phòng thủ: closure của navigationDestination do SwiftUI lưu và có thể sống lâu hơn view này,
-        // nên nó chỉ capture weak — `seed` là Navigator (weak sẵn), còn stack capture [weak].
+        // SwiftUI stores the destination closure and may keep it longer than this view,
+        // so it captures weakly: `seed` is a (weak) Navigator and `stack` is [weak].
         let seed = parentNav
         NavigationStack(path: $stack.path) {
             stack.root.erasedHost(stack: stack, tree: seed.tree)
@@ -95,8 +90,8 @@ struct NavStackView: View {
     }
 }
 
-/// View của một màn. Chỉ giữ mạnh node (cần cho binding sheet/cover/popover) và Navigator;
-/// stack và tree đi qua Navigator dưới dạng weak — cây mới là chủ sở hữu.
+/// View for one screen. Holds its node strongly (needed for the sheet/cover/popover bindings)
+/// plus a Navigator; stack and tree are reached weakly through the Navigator.
 struct NavScreenHost<Screen: NavScreen>: View {
 
     @Bindable var node: NavScreenNode<Screen>
@@ -128,7 +123,7 @@ struct NavScreenHost<Screen: NavScreen>: View {
     }
 }
 
-/// Section debug: in cây điều hướng hiện tại — nhúng được vào List của mọi màn.
+/// Debug section that prints the live navigation tree; drop it into any List.
 public struct NavTreeSection: View {
 
     @Environment(\.navigator) private var nav

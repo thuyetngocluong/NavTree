@@ -2,7 +2,7 @@ import Testing
 import SwiftUI
 @testable import NavTree
 
-// MARK: - Fixtures (round 3: fuzz cấp NavTree với kiểm tra bất biến)
+// MARK: - Fixtures (round 3: NavTree-level fuzz with invariant checks)
 
 private struct S: NavScreen {
     var body: some View { Text("s") }
@@ -46,7 +46,7 @@ private struct SeededRandom {
     }
 }
 
-/// Đếm awaiter đã bắt đầu / đã resume — không `await task.value` để test không bao giờ treo.
+/// Counts started / resumed awaiters. No `await task.value`, so the test never hangs.
 @MainActor
 private final class AwaitLedger {
     var started = 0
@@ -68,7 +68,7 @@ private func syncPresent(_ nav: Navigator, _ style: NavPresentationStyle) {
     nav.present(S(), as: style)
 }
 
-/// Mọi (stack, node) còn trong cây, theo thứ tự duyệt.
+/// Every (stack, node) still in the tree, in traversal order.
 @MainActor
 private func walk(_ tree: NavTree) -> [(stack: NavStack, node: any NavNode)] {
     var out: [(stack: NavStack, node: any NavNode)] = []
@@ -104,33 +104,33 @@ private func checkInvariants(_ tree: NavTree, _ context: String) {
     var stacks: [ObjectIdentifier: NavStack] = [:]
     for (stack, node) in all {
         stacks[ObjectIdentifier(stack)] = stack
-        #expect(!node.isRemoved, "màn đã gỡ còn trong cây — \(context)")
+        #expect(!node.isRemoved, "removed screen still in tree, \(context)")
         for modal in node.presented {
-            #expect(modal.owner === node, "owner sai — \(context)")
-            #expect(modal.style != nil, "modal không có style — \(context)")
+            #expect(modal.owner === node, "wrong owner, \(context)")
+            #expect(modal.style != nil, "modal has no style, \(context)")
         }
     }
-    // Một NavigationStack chỉ present được một modal; với tab là một modal cho cả TabView.
+    // A NavigationStack can present only one modal; with tabs, one modal for the whole TabView.
     for stack in stacks.values where stack.tabs == nil {
-        #expect(modalCount(inChainOf: stack) <= 1, "stack có >1 modal — \(context)")
+        #expect(modalCount(inChainOf: stack) <= 1, "stack has >1 modal, \(context)")
     }
     if case .tabs(let tabs) = tree.root {
         let total = tabs.tabs.map { modalCount(inChainOf: $0.stack) }.reduce(0, +)
-        #expect(total <= 1, "TabView có >1 modal — \(context)")
+        #expect(total <= 1, "TabView has >1 modal, \(context)")
     }
     for stack in stacks.values {
         var length = 0
         var cursor = stack.root.pushed
         while let node = cursor { length += 1; cursor = node.pushed }
-        #expect(stack.path.count == length, "path lệch chuỗi pushed — \(context)")
+        #expect(stack.path.count == length, "path out of sync with pushed chain, \(context)")
     }
-    // tree.current phải là màn trên cùng của ngữ cảnh không bị che.
+    // tree.current must be the top screen of the uncovered context.
     let current = tree.current
-    #expect(current.node != nil, "current rỗng — \(context)")
-    #expect(current.node?.isRemoved == false, "current trỏ màn đã gỡ — \(context)")
+    #expect(current.node != nil, "current is empty, \(context)")
+    #expect(current.node?.isRemoved == false, "current points to a removed screen, \(context)")
     if let stack = current.stack {
-        #expect(current.node === stack.top, "current không phải top — \(context)")
-        #expect(stack.coveringModal == nil, "current đang bị modal che — \(context)")
+        #expect(current.node === stack.top, "current is not top, \(context)")
+        #expect(stack.coveringModal == nil, "current is covered by a modal, \(context)")
     }
 }
 
@@ -165,7 +165,7 @@ private func runStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int) async {
         case 5:
             nav.dismiss(returning: step)
         case 6:
-            tree.selectTab(rng.next(4)) // có cả index ngoài phạm vi
+            tree.selectTab(rng.next(4)) // includes out-of-range indexes
         case 7:
             pick.node.isVisible.toggle()
         case 8:
@@ -188,16 +188,16 @@ private func runStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int) async {
         case 10:
             pathSnapshots.append((pick.stack, pick.stack.path))
         case 11:
-            // SwiftUI ghi lại một path cũ bất kỳ.
+            // SwiftUI writes back some stale path.
             if !pathSnapshots.isEmpty {
                 let (stack, path) = pathSnapshots[rng.next(pathSnapshots.count)]
                 stack.path = path
             }
         case 12:
-            // Vuốt tắt: binding của SwiftUI set nil.
+            // Swipe to dismiss: SwiftUI binding sets nil.
             pick.node.presented.removeAll { $0.style == styles[rng.next(3)] }
         case 13:
-            // Navigator zombie: mọi lệnh phải là no-op.
+            // Zombie Navigator: every call must be a no-op.
             if !zombiePool.isEmpty {
                 let zombie = zombiePool[rng.next(zombiePool.count)]
                 if zombie.node == nil || zombie.node?.isRemoved == true {
@@ -209,11 +209,11 @@ private func runStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int) async {
                     case 3: zombie.popToRoot()
                     default: zombie.dismiss(returning: "zombie")
                     }
-                    #expect(tree.treeLines() == before, "zombie đổi cây — \(context)")
+                    #expect(tree.treeLines() == before, "zombie changed the tree, \(context)")
                 }
             }
         case 14:
-            // Deep link qua tree.current.
+            // Deep link via tree.current.
             if rng.next(2) == 0 { syncPush(tree.current) } else { syncPresent(tree.current, styles[rng.next(3)]) }
         default:
             tree.selectedTab = rng.next(3)
@@ -221,13 +221,13 @@ private func runStorm(makeTree: () -> NavTree, seed: UInt64, steps: Int) async {
         checkInvariants(tree, context)
     }
 
-    // Huỷ cây: mọi awaiter phải resume (qua gỡ màn hoặc deinit), không cái nào treo.
+    // Drop the tree: every awaiter must resume (via removal or deinit), none may hang.
     zombiePool.removeAll()
     pathSnapshots.removeAll()
     treeHolder = nil
     for _ in 0..<5 { await settle() }
-    #expect(weakTree == nil, "cây không được giải phóng — seed \(seed)")
-    #expect(ledger.finished == ledger.started, "awaiter treo: \(ledger.started - ledger.finished)/\(ledger.started) — seed \(seed)")
+    #expect(weakTree == nil, "tree was not released, seed \(seed)")
+    #expect(ledger.finished == ledger.started, "pending awaiters: \(ledger.started - ledger.finished)/\(ledger.started), seed \(seed)")
 }
 
 @MainActor

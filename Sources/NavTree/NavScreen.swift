@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Màn hình push / present được — khai `body` như một View bình thường.
+/// A screen that can be pushed or presented. Write `body` like any View.
 public protocol NavScreen: View {}
 
-/// Màn gốc của app khi không dùng tab bar — dùng với `NavRootView(root:)`.
+/// Root screen of an app without a tab bar. Use with `NavTree(root:)` or `NavRootView(root:)`.
 public protocol NavRootScreen: NavScreen {}
 
-/// Màn gốc của một tab.
+/// Root screen of one tab.
 public protocol NavTabScreen: NavScreen {
     var tabTitle: String { get }
     var tabSystemImage: String { get }
@@ -22,9 +22,9 @@ public enum NavTabBuilder {
     public static func buildArray(_ parts: [[any NavTabScreen]]) -> [any NavTabScreen] { parts.flatMap { $0 } }
 }
 
-/// Màn tab bar của app — chỉ khai `content` (danh sách tab), thân được gán ngầm.
-/// Cố ý KHÔNG phải NavScreen: tab bar chỉ đứng ở gốc, không push/present được.
-/// Dùng qua `NavTree(root:)` / `NavRootView(root:)`; thân ngầm chỉ là đường tắt cho preview.
+/// The app's tab bar. Declare only `content` (the tabs); `body` is provided.
+/// Deliberately NOT a NavScreen: a tab bar lives at the root and can't be pushed or presented.
+/// Use it via `NavTree(root:)` or `NavRootView(root:)`; the implicit `body` is a preview shortcut.
 public protocol NavTabBarScreen: View {
     @NavTabBuilder var content: [any NavTabScreen] { get }
 }

@@ -1,21 +1,19 @@
 import SwiftUI
 
-/// Thời điểm resume của các API await.
+/// When an `await push/present` resumes.
 public enum NavAwaitUntil: Sendable {
-    /// Ngay khi màn bị gỡ khỏi cây (mặc định).
+    /// As soon as the screen leaves the tree (default).
     case removed
-    /// Sau khi animation đóng kết thúc (màn đã khuất hẳn).
-    /// Màn bị gỡ khi đang bị che thì resume ngay lúc gỡ.
+    /// After the close animation finishes. Resumes at removal if nothing visible was closed.
     case disappeared
 }
 
-/// Handle điều hướng của MỘT màn: mọi lệnh push/pop/present/dismiss đều tương đối so với màn đó.
-/// Struct giữ nonisolated để @Entry tạo default value được; mọi API mutate đều @MainActor.
+/// Navigation handle for ONE screen; push/pop/present/dismiss are relative to that screen.
+/// Nonisolated so `@Entry` can build a default; every mutating API is `@MainActor`.
 ///
-/// Mọi tham chiếu đều `weak`: cây mới là chủ sở hữu, Navigator chỉ là handle.
-/// Nếu giữ mạnh, một `await push/present` đang treo sẽ tạo vòng
-/// Task → Navigator → node → màn con → continuation → Task, khiến cả cây không bao giờ được giải phóng
-/// và awaiter không bao giờ resume khi cây bị huỷ (đổi root, đóng cửa sổ).
+/// All references are weak: the tree owns the model. Strong refs would form the cycle
+/// Task -> Navigator -> node -> child -> continuation -> Task during an await, so a torn-down
+/// tree (root swap, window closed) would never be freed and its awaiters would never resume.
 public struct Navigator {
 
     weak var stack: NavStack?
@@ -28,23 +26,23 @@ public struct Navigator {
         self.tree = tree
     }
 
-    /// Node còn sống trong cây không — chặn điều hướng "zombie" từ màn đã bị gỡ
-    /// (ví dụ Task còn giữ navigator sau khi màn bị pop).
+    /// The node if it is still in the tree. Blocks "zombie" navigation from removed screens
+    /// (e.g. a Task still holding the navigator after a pop).
     @MainActor
     private var liveNode: (any NavNode)? {
         guard let node, !node.isRemoved else { return nil }
         return node
     }
 
-    /// Push một màn ngay sau màn hiện tại.
+    /// Pushes a screen after this one.
     @MainActor
     public func push(_ screen: some NavScreen) {
         liveNode?.push(screen)
     }
 
-    /// Present một màn thành stack mới (luôn có NavigationStack riêng).
-    /// Stack chứa màn này đang có modal (dù do màn khác trong stack present) thì tự chuyển tiếp
-    /// vào ngữ cảnh sâu nhất, vì một NavigationStack chỉ present được một modal cùng lúc.
+    /// Presents a screen in a new stack (with its own NavigationStack).
+    /// If a modal already covers this stack, it forwards into the deepest one:
+    /// a NavigationStack can present only one modal at a time.
     @MainActor
     public func present(_ screen: some NavScreen, as style: NavPresentationStyle, config: NavPresentationConfig = .default) {
         presentTarget?.present(screen, style: style, config: config)
@@ -56,19 +54,18 @@ public struct Navigator {
         return stack?.topmostPresenter(from: node) ?? node
     }
 
-    /// Push và treo cho tới khi màn đó bị gỡ khỏi cây
-    /// (pop, popToRoot, hoặc stack chứa nó bị dismiss),
-    /// hoặc tới khi animation đóng kết thúc nếu `until: .disappeared`.
-    /// Kết quả trả về type-erased dạng `any Sendable` — bên gọi tự cast về type mong đợi.
+    /// Pushes and waits until the screen is removed (pop, popToRoot, its stack dismissed),
+    /// or until its close animation ends with `until: .disappeared`.
+    /// Returns the `pop(returning:)` value as `(any Sendable)?`; cast it at the call site.
     ///
-    /// Huỷ Task KHÔNG kết thúc lệnh chờ: màn vẫn đang hiển thị nên trả `nil` sớm sẽ sai nghĩa
-    /// (ví dụ `.task` bị huỷ ngay khi chính cover nó mở che lên). Lệnh chờ luôn kết thúc khi màn bị gỡ
-    /// hoặc khi cây bị huỷ, nên thời gian treo bị giới hạn bởi vòng đời của màn.
+    /// Cancelling the Task does NOT end the wait: the screen is still up, so an early `nil` would lie
+    /// (e.g. `.task` is cancelled as soon as its own cover hides it). The wait always ends when the
+    /// screen is removed or the tree is released.
     @discardableResult
     @MainActor
     public func push(_ screen: some NavScreen, until moment: NavAwaitUntil = .removed) async -> (any Sendable)? {
-        // Mọi tham chiếu mạnh chỉ sống trong closure đồng bộ này, không vắt qua điểm treo —
-        // để cây bị huỷ thì màn con deinit được và resume awaiter bằng nil.
+        // Strong refs live only inside this synchronous closure, never across the suspension,
+        // so a released tree can deinit the child and resume the awaiter with nil.
         await withCheckedContinuation { continuation in
             guard let node = liveNode else {
                 continuation.resume(returning: nil)
@@ -84,14 +81,11 @@ public struct Navigator {
         }
     }
 
-    /// Present và treo cho tới khi stack đó bị dismiss
-    /// (dismiss, vuốt tắt sheet, hoặc cả cành phía trên bị gỡ),
-    /// hoặc tới khi animation đóng kết thúc nếu `until: .disappeared`.
-    /// Kết quả trả về type-erased dạng `any Sendable` — bên gọi tự cast về type mong đợi.
+    /// Presents and waits until the stack is dismissed (dismiss, swipe-down, or an ancestor removed),
+    /// or until its close animation ends with `until: .disappeared`.
+    /// Returns the `dismiss(returning:)` value as `(any Sendable)?`; cast it at the call site.
     ///
-    /// Huỷ Task KHÔNG kết thúc lệnh chờ: màn vẫn đang hiển thị nên trả `nil` sớm sẽ sai nghĩa
-    /// (ví dụ `.task` bị huỷ ngay khi chính cover nó mở che lên). Lệnh chờ luôn kết thúc khi màn bị gỡ
-    /// hoặc khi cây bị huỷ, nên thời gian treo bị giới hạn bởi vòng đời của màn.
+    /// Cancelling the Task does NOT end the wait (see `push(_:until:)`).
     @discardableResult
     @MainActor
     public func present(_ screen: some NavScreen, as style: NavPresentationStyle, config: NavPresentationConfig = .default, until moment: NavAwaitUntil = .removed) async -> (any Sendable)? {
@@ -110,53 +104,52 @@ public struct Navigator {
         }
     }
 
-    /// Màn hiện tại có nằm trong một modal (sheet/cover/popover) không — stack gốc / tab thì không.
+    /// Whether this screen is inside a modal (sheet/cover/popover), not a root or tab stack.
     @MainActor
     public var isPresented: Bool {
         stack?.style != nil
     }
 
-    /// Pop màn hiện tại, kèm kết quả trả cho bên đang `await push` (nếu có).
-    /// Đang ở màn đầu của một modal → dismiss cả modal.
+    /// Pops this screen, handing `result` to an `await push` caller.
+    /// On the first screen of a modal it dismisses the modal.
     @MainActor
     public func pop(returning result: (any Sendable)? = nil) {
         guard let stack, let node = liveNode else { return }
         stack.pop(node, returning: result)
     }
 
-    /// Pop về màn đầu của stack hiện tại.
-    /// Như mọi lệnh khác, no-op nếu màn này đã bị gỡ — một Task còn giữ navigator cũ
-    /// không được phép pop những màn người dùng mở sau đó.
+    /// Pops to the first screen of this stack.
+    /// No-op from a removed screen, so a late Task can't pop screens opened afterwards.
     @MainActor
     public func popToRoot() {
         guard liveNode != nil else { return }
         stack?.popToRoot()
     }
 
-    /// Đóng modal đang chứa màn này (gỡ cả stack khỏi node đã present nó),
-    /// kèm kết quả trả cho bên đang `await present` (nếu có). Ở stack gốc là no-op.
+    /// Closes the modal containing this screen, handing `result` to an `await present` caller.
+    /// No-op on a root stack.
     @MainActor
     public func dismiss(returning result: (any Sendable)? = nil) {
-        // Màn đã bị gỡ (ví dụ đã pop khỏi sheet) thì không được đóng sheet người dùng đang xem.
+        // A removed screen (e.g. popped out of the sheet) must not close the sheet the user is on.
         guard let stack, liveNode != nil else { return }
         stack.pendingResult = result
         stack.dismissSelf()
     }
 
-    /// Chuyển tab theo index (chỉ có tác dụng khi gốc cây là tab bar).
+    /// Selects a tab by index (tab bar roots only).
     @MainActor
     public func selectTab(_ index: Int) {
         tree?.selectTab(index)
     }
 
-    /// Toàn bộ cây điều hướng, dạng text để quan sát / debug.
+    /// The whole tree as text, for debugging.
     @MainActor
     public func treeLines() -> [String] {
         tree?.treeLines() ?? stack?.treeLines() ?? []
     }
 }
 
-// So sánh theo identity để environment không invalidate oan.
+// Identity comparison, so the environment value doesn't invalidate views needlessly.
 extension Navigator: Equatable {
     public static func == (lhs: Navigator, rhs: Navigator) -> Bool {
         lhs.stack === rhs.stack && lhs.node === rhs.node && lhs.tree === rhs.tree
@@ -166,9 +159,9 @@ extension Navigator: Equatable {
 public extension EnvironmentValues {
     @Entry var navigator = Navigator()
 
-    /// Cây điều hướng của Scene chứa view này, cho các thao tác toàn cây (`current`, `selectedTab`…).
-    /// Chỉ giữ weak — cây do `SceneRoot` / `NavRootView` sở hữu. `nil` ngoài một `NavRootView`.
-    /// Đọc thuộc tính của nó trong `body` vẫn được Observation theo dõi như bình thường.
+    /// The tree of the window containing this view, for whole-tree work (`current`, `selectedTab`, `reset`).
+    /// Weak: the tree is owned by your scene root or `NavRootView`. `nil` outside a `NavRootView`.
+    /// Reading its properties in `body` is still tracked by Observation.
     var navTree: NavTree? {
         navigator.tree
     }

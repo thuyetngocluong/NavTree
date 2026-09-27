@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Awaiter pha "disappeared": giữ continuation + kết quả được chốt tại thời điểm màn bị gỡ.
-/// @unchecked Sendable: `result` chỉ được mutate trên MainActor trước khi resume;
-/// deinit của node/stack (nonisolated) resume phần còn sót với exclusive access.
+/// A pending `until: .disappeared` await: the continuation plus the result captured at removal.
+/// @unchecked Sendable: `result` is only mutated on the MainActor before resuming;
+/// a nonisolated deinit resumes leftovers with exclusive access.
 final class NavDisappearAwaiter: @unchecked Sendable {
 
     let continuation: CheckedContinuation<(any Sendable)?, Never>
@@ -17,30 +17,29 @@ final class NavDisappearAwaiter: @unchecked Sendable {
     }
 }
 
-/// Một màn trong cây. `pushed` là màn được push ngay sau nó (cùng NavigationStack),
-/// `presented` là các modal (sheet/cover/popover) mọc ra từ nó — mỗi modal là một NavStack riêng.
+/// One screen in the tree. `pushed` is the next screen in the same NavigationStack;
+/// `presented` holds the modals (sheet/cover/popover) opened from it, each its own NavStack.
 @MainActor
 protocol NavNode: AnyObject {
     var id: UUID { get }
     var debugTitle: String { get }
     var pushed: (any NavNode)? { get set }
     var presented: [NavStack] { get set }
-    /// Continuation của các `await push(until: .removed)` đang chờ node này bị gỡ khỏi cây.
-    /// Giá trị resume là `any Sendable` type-erased — bên gọi `await` tự cast về type mong đợi.
+    /// `await push(until: .removed)` callers waiting for this node to leave the tree.
     var removalContinuations: [CheckedContinuation<(any Sendable)?, Never>] { get set }
-    /// Awaiter của các `await push(until: .disappeared)` — resume sau khi animation đóng xong.
+    /// `await push(until: .disappeared)` callers, resumed after the close animation.
     var disappearAwaiters: [NavDisappearAwaiter] { get set }
-    /// Kết quả sẽ trả cho awaiter khi node bị gỡ (set bởi pop(returning:)).
+    /// Result handed to awaiters on removal (set by `pop(returning:)`).
     var pendingResult: (any Sendable)? { get set }
-    /// View của node có đang hiển thị không (onAppear/onDisappear cập nhật).
+    /// Whether the node's view is on screen (updated by onAppear/onDisappear).
     var isVisible: Bool { get set }
-    /// Node đã bị gỡ khỏi cây chưa — để onDisappear phân biệt "bị pop" với "bị che".
+    /// Whether the node has left the tree, so onDisappear can tell "popped" from "covered".
     var isRemoved: Bool { get set }
-    /// Màn còn hiển thị của modal mà node này vừa đóng (weak, tự hết hiệu lực khi màn đó onDisappear).
-    /// Nếu node bị gỡ ngay sau đó (cùng lượt xử lý, ví dụ dismiss rồi popToRoot), awaiter `.disappeared`
-    /// của nó vẫn phải chờ modal đang chạy animation đóng dù modal đã rời cây con.
+    /// Still-visible screen of a modal this node just closed (weak, cleared by that screen's onDisappear).
+    /// If this node is removed in the same tick (e.g. dismiss then popToRoot), its `.disappeared`
+    /// awaiters must still wait for that modal's close animation.
     var closingModalScreen: (any NavNode)? { get set }
-    /// Điểm type-erase duy nhất của hệ thống — bên trong NavScreenHost đã concrete hoàn toàn.
+    /// The only type-erasure point; everything inside NavScreenHost is concrete.
     func erasedHost(stack: NavStack, tree: NavTree?) -> AnyView
 }
 
@@ -53,8 +52,8 @@ extension NavNode {
         return node
     }
 
-    /// Gắn modal trực tiếp vào node này, KHÔNG chuyển tiếp.
-    /// Đường điều hướng thật đi qua `Navigator.present`, nơi chọn đích bằng `NavStack.topmostPresenter(from:)`.
+    /// Attaches a modal directly to this node, with NO forwarding.
+    /// Real navigation goes through `Navigator.present`, which picks the target via `NavStack.topmostPresenter(from:)`.
     @discardableResult
     func present(_ screen: some NavScreen, style: NavPresentationStyle, config: NavPresentationConfig = .default) -> NavStack {
         let stack = NavStack(root: NavScreenNode(screen), style: style, owner: self, config: config)
@@ -62,8 +61,8 @@ extension NavNode {
         return stack
     }
 
-    /// Màn sâu nhất còn hiển thị trong cây con tính từ node này (chính nó, đuôi push phía sau, và mọi modal
-    /// treo trên chuỗi đó), `nil` nếu không màn nào hiển thị. Modal được ưu tiên vì nó nằm trên cùng.
+    /// Deepest visible screen in this node's subtree (itself, the pushed tail, and modals on that chain),
+    /// or `nil` if nothing is visible. Modals win because they sit on top.
     var deepestVisibleInSubtree: (any NavNode)? {
         var visibleInChain: (any NavNode)? = nil
         var modal: NavStack? = nil
@@ -74,15 +73,15 @@ extension NavNode {
             if let presented = node.presented.last {
                 modal = presented
             } else if let closing = node.closingModalScreen, closing.isVisible {
-                closingModal = closing          // modal đã rời cây nhưng còn đang đóng trên màn hình
+                closingModal = closing          // left the tree but still animating out
             }
             cursor = node.pushed
         }
         return modal?.root.deepestVisibleInSubtree ?? closingModal ?? visibleInChain
     }
 
-    /// - Parameter handoff: màn còn hiển thị sẽ nhận awaiter `.disappeared` nếu chính node này đã khuất
-    ///   (ví dụ bị fullScreenCover che). Phải tính TRƯỚC khi cây con bị gỡ.
+    /// - Parameter handoff: visible screen that takes over `.disappeared` awaiters when this node
+    ///   is already hidden (e.g. under a fullScreenCover). Must be computed BEFORE the subtree is removed.
     func resumeRemoval(handoff: (any NavNode)? = nil) {
         isRemoved = true
         let result = pendingResult
@@ -92,13 +91,11 @@ extension NavNode {
         removalContinuations = []
         continuations.forEach { $0.resume(returning: result) }
 
-        // Chốt kết quả cho pha disappeared — chỉ khi node có kết quả thật,
-        // để không ghi đè result của awaiter được stack dismiss chuyển sang.
+        // Only stamp a real result, so a result handed over by a dismissed stack isn't overwritten.
         if let result {
             disappearAwaiters.forEach { $0.result = result }
         }
-        // Node đã khuất: nếu trong cây con bị gỡ cùng lúc còn màn đang hiển thị (modal đè lên) thì chờ
-        // animation đóng của màn đó; không có thì không còn animation nào liên quan — resume luôn.
+        // Hidden node: wait for the visible screen closing with it, if any; otherwise nothing animates, resume now.
         if !isVisible {
             if let handoff, handoff !== self {
                 handoff.disappearAwaiters.append(contentsOf: disappearAwaiters)
@@ -109,19 +106,19 @@ extension NavNode {
         }
     }
 
-    /// Gọi khi view của node đã khuất hẳn (onDisappear sau khi node bị gỡ).
+    /// Called once the node's view is gone (onDisappear after removal).
     func resumeDisappear() {
         let awaiters = disappearAwaiters
         disappearAwaiters = []
         awaiters.forEach { $0.resume() }
     }
 
-    /// Node này vừa bị gỡ khỏi cây: resume mọi awaiter của cả subtree
-    /// (đuôi push phía sau + mọi modal treo dưới, đệ quy qua didSet của presented).
+    /// This node just left the tree: resume every awaiter in its subtree
+    /// (pushed tail plus all modals, recursively via `presented`'s didSet).
     func resumeRemovedSubtree() {
         var node: (any NavNode)? = self
         while let n = node {
-            // Tính đích bàn giao trước khi gỡ modal của n (lúc đó cây con còn nguyên).
+            // Pick the handoff target while n's subtree is still intact.
             let handoff = n.isVisible || n.disappearAwaiters.isEmpty ? nil : n.deepestVisibleInSubtree
             n.presented = []
             n.resumeRemoval(handoff: handoff)
@@ -130,7 +127,7 @@ extension NavNode {
     }
 }
 
-/// Node concrete bọc một màn cụ thể.
+/// Concrete node wrapping one screen.
 @MainActor
 @Observable
 final class NavScreenNode<Screen: NavScreen>: NavNode {
@@ -170,7 +167,7 @@ final class NavScreenNode<Screen: NavScreen>: NavNode {
     }
 
     deinit {
-        // Lưới an toàn: cây bị deallocate khi vẫn còn awaiter treo.
+        // Safety net: released while awaiters are still pending.
         removalContinuations.forEach { $0.resume(returning: nil) }
         disappearAwaiters.forEach { $0.resume() }
     }

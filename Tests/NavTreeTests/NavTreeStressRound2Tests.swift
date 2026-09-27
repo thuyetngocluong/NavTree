@@ -49,7 +49,7 @@ private struct CustomResult: Sendable, Equatable {
     let tag: String
 }
 
-// MARK: - Reentrancy: điều hướng tiếp ngay khi continuation resume
+// MARK: - Reentrancy: navigate again right when the continuation resumes
 
 @MainActor
 struct ReentrancyTests {
@@ -107,7 +107,7 @@ struct ReentrancyTests {
     }
 }
 
-// MARK: - Đệ quy sâu & kích thước lớn
+// MARK: - Deep recursion & large sizes
 
 @MainActor
 struct DeepNestingTests {
@@ -148,7 +148,7 @@ struct DeepNestingTests {
     }
 }
 
-// MARK: - Kết quả: kiểu tuỳ ý, double-dismiss, mid-pop
+// MARK: - Results: any type, double-dismiss, mid-pop
 
 @MainActor
 struct ResultEdgeTests {
@@ -234,7 +234,7 @@ struct TabsEdgeTests {
         let tree = NavTree(root: TwoTabs())
         let tabs = tree.tabs!
         tabs.tabs[1].stack.push(DummyScreen())
-        // Navigator của tab A vẫn in được toàn cây vì mang tree.
+        // Tab A's Navigator can still print the whole tree since it holds the tree.
         let lines = tree.current.treeLines()
         #expect(lines.count == 5)
         #expect(lines.filter { $0.contains("[tab]") }.count == 2)
@@ -242,7 +242,7 @@ struct TabsEdgeTests {
     }
 }
 
-// MARK: - Fuzz đa seed + giả lập visibility
+// MARK: - Multi-seed fuzz + simulated visibility
 
 @MainActor
 struct FuzzRound2Tests {
@@ -289,8 +289,8 @@ struct FuzzRound2Tests {
                 awaitTasks.append(Task { await nav.push(DummyScreen()) })
                 await settle()
             default:
-                // .disappeared cần UI thật bắn onDisappear — fuzz chỉ dùng .removed,
-                // đường .disappeared đã có test tất định riêng.
+                // .disappeared needs real UI to fire onDisappear, so fuzz uses only .removed.
+                // .disappeared has its own deterministic tests.
                 awaitTasks.append(Task { await nav.present(DummyScreen(), as: .sheet) })
                 await settle()
             }
